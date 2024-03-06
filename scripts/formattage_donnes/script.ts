@@ -11,15 +11,6 @@ type T_sku = {
 
 const INDEX_NAME = "skus";
 const RESULTS_SIZE = 1000;
-const skusMapping: MappingTypeMapping = {
-  properties: {
-    id: { type: "text" },
-    name: { type: "text" },
-    description: { type: "text" },
-
-    weight: { type: "float" },
-  },
-};
 
 const client = new Client({
   node: "https://localhost:9200", // Elasticsearch endpoint
@@ -54,7 +45,18 @@ const createIndex = async () =>
   await client.indices.create({
     index: INDEX_NAME,
     body: {
-      mappings: skusMapping,
+      mappings: {
+        properties: {
+          id: { type: "text" },
+          name: { type: "text", analyzer: "french" },
+          description: {
+            type: "text",
+            analyzer: "french",
+          },
+
+          weight: { type: "float" },
+        },
+      },
     },
   });
 
@@ -81,6 +83,7 @@ const indexDocuments = async () => {
 
   return await client.bulk({
     refresh: true,
+    /**@todo intégrer un analyseur */
     operations: operations,
   });
 };
@@ -89,9 +92,6 @@ const indexDocuments = async () => {
 const searchSkus = async () =>
   await client.search({
     index: INDEX_NAME,
-    // query: {
-    //   multi_match: { query: "lits", fields: ["name", "description"] },
-    // },
     query: {
       bool: {
         must: [
@@ -101,25 +101,19 @@ const searchSkus = async () =>
         ],
       },
     },
-    aggs: {
-      // "weight-agg": {
-      //   terms: {
-      //     field: "weight.keyword",
-      //   },
-      // },
-
-      "weight-agg": {
-        range: {
-          field: "weight",
-          ranges: [
-            { from: 0, to: 10 },
-            { from: 10, to: 20 },
-            { from: 10, to: 30 },
-            { from: 10, to: 40 },
-          ],
-        },
-      },
-    },
+    // aggs: {
+    //   "weight-agg": {
+    //     range: {
+    //       field: "weight",
+    //       ranges: [
+    //         { from: 0, to: 10 },
+    //         { from: 10, to: 20 },
+    //         { from: 10, to: 30 },
+    //         { from: 10, to: 40 },
+    //       ],
+    //     },
+    //   },
+    // },
     size: RESULTS_SIZE,
     from: RESULTS_SIZE * 0,
   });
@@ -132,6 +126,7 @@ const searchSkus = async () =>
 
   /* Getters */
   // console.log((await client.indices.get({ index: INDEX_NAME }))[INDEX_NAME]);
+  // console.log((await client.indices.getMapping()).skus);
   // console.log(
   //   (await client.search({ index: INDEX_NAME, size: 10000 })).hits.hits
   // );
