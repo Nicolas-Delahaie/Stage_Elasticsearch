@@ -1,0 +1,9 @@
+{
+  "mappings": {
+    "properties": {
+      "id": { "type": "text" },
+      "name": { "type": "text" },
+      "description": { "type": "text" }
+    }
+  }
+}

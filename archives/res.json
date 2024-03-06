@@ -1,0 +1,9 @@
+{
+  "_index": "skus",
+  "_id": "Mm1jDo4B6mkM6r-vtH-o",
+  "_version": 1,
+  "result": "created",
+  "_shards": { "total": 2, "successful": 1, "failed": 0 },
+  "_seq_no": 0,
+  "_primary_term": 1
+}
