@@ -1,14 +1,10 @@
 import fs from "fs";
 
 const FILE_NAME = "generated_embeddings.json";
-const EMBED_DIMS = 200;
+const EMBED_DIMS = 1500;
 
 // ----------------- FONCTIONS ----------------- //
-async function embedding_generation() {
-  const texts = [
-    "J'ai vraiment une bonne allure quand je fais du vélo avec toute ma famille qui vient du nord de l'Afrique",
-    "Je suis un étudiant en Informatique vivant à Bayonne depuis 3 ans",
-  ];
+async function embedding_generation(texts: string[]) {
   const response = await fetch(
     "https://api.openai.com/v1/embeddings?model=text-embedding-3-small",
     {
@@ -43,9 +39,11 @@ async function embedding_generation() {
       embedding: data.embedding.slice(0, EMBED_DIMS),
       usageForSelection: index === 0 ? brutResults.usage : undefined,
     }));
-    const embeddings = JSON.parse(fs.readFileSync(FILE_NAME, "utf8")) as any[];
-    const embeddingsWithNew = JSON.stringify([...embeddings, ...results]);
-    fs.writeFile(FILE_NAME, embeddingsWithNew, (err) => {});
+    const prevRes = JSON.parse(fs.readFileSync(FILE_NAME, "utf8")) as any[];
+    const newRes = JSON.stringify([...prevRes, ...results]);
+    fs.writeFile(FILE_NAME, newRes, (err) => {});
+
+    return results;
   }
 }
 function cosineSimilarity(vecA: any, vecB: any) {
@@ -62,11 +60,17 @@ function cosineSimilarity(vecA: any, vecB: any) {
 
 // ----------------- TESTS ----------------- //
 (async function () {
-  await embedding_generation();
+  const texts = [
+    "couchette pour 2",
+    "Lit 2 personnes très confortable ayant une largeur comprise entre 30cm et 50cm",
+  ];
 
-  const file = fs.readFileSync(FILE_NAME, "utf8");
-  const embeddings = JSON.parse(file) as any[];
-  console.log(
-    cosineSimilarity(embeddings[0].embedding, embeddings[3].embedding)
-  );
+  const embeddings = await embedding_generation(texts);
+  // const file = fs.readFileSync(FILE_NAME, "utf8");
+  // const embeddings = JSON.parse(file) as any[];
+  if (embeddings) {
+    console.log(
+      cosineSimilarity(embeddings[0].embedding, embeddings[1].embedding)
+    );
+  }
 })();
