@@ -1,43 +1,48 @@
-// npm install node-gyp
-// npm install @tensorflow/tfjs-node
+import fs from "fs";
 
-// Charger un modèle pré-entraîné, par exemple Universal Sentence Encoder
-// import * as tf from "@tensorflow/tfjs-node";
-import * as use from "@tensorflow-models/universal-sentence-encoder";
+const FILE_NAME = "generated_embeddings.json";
+const EMBED_DIMS = 200;
 
-async function getEmbeddings(text: string) {
-  const model = await use.load();
-  const embeddings = await model.embed([text]);
-  embeddings.print(); // Affiche les embeddings dans la console
+async function query(texts: string[]) {
+  const response = await fetch(
+    "https://api.openai.com/v1/embeddings?model=text-embedding-3-small",
+    {
+      headers: {
+        Authorization:
+          "Bearer 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",
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+      body: JSON.stringify({
+        input: texts,
+        model: "text-embedding-3-small",
+      }),
+    }
+  );
+  const brutResults = (await response.json()) as {
+    objets: string;
+    data: { object: string; index: number; embedding: number[] }[];
+    model: string;
+    usage: { prompt_tokens: number; total_tokens: number };
+  };
+
+  // Sauvegarde des resultats
+  const results = brutResults.data.map((data, index) => ({
+    text: texts[index],
+    embedding: data.embedding.slice(0, EMBED_DIMS),
+    usageForSelection: index === 0 ? brutResults.usage : undefined,
+  }));
+  const embeddings = JSON.parse(fs.readFileSync(FILE_NAME, "utf8")) as any[];
+  const embeddingsWithNew = JSON.stringify([...embeddings, ...results]);
+  fs.writeFile(FILE_NAME, embeddingsWithNew, (err) => {});
 }
 
-// Générer des embeddings pour un exemple de texte
-getEmbeddings("Hello, world!");
+query([
+  // "Today is a sunny day",
+  // "That is a very happy person",
+  // "That is a happy dog",
+  // "Essentiel pour préserver son matelas, l'alèse spécialement adaptée au matelas berceau TROLL.<br>Coloris écru.<br>100 % coton waterproof, intérieur 100 % polyester, bordures avec élastique <br> Lavable en machine à 95°<br><br>",
+]);
 
-// async function query(body: any) {
-//   const response = await fetch(
-//     "https://api-inference.huggingface.co/models/sentence-transformers/msmarco-MiniLM-L-12-v3",
-//     {
-//       headers: {
-//         Authorization: "Bearer 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",
-//       },
-//       method: "POST",
-//       body: JSON.stringify(body),
-//     }
-//   );
-//   const result = await response.json();
-//   return result;
-// }
-
-// // query({
-// //   inputs: {
-// //     source_sentence: "That is a happy person",
-// //     sentences: [
-// //       "That is a happy dog",
-// //       "That is a very happy person",
-// //       "Today is a sunny day",
-// //     ],
-// //   },
-// // }).then((response) => {
-// //   console.log(JSON.stringify(response));
-// // });
+// const embeddings = JSON.parse(fs.readFileSync(FILE_NAME, "utf8")) as any[];
+// console.log(embeddings[0].embedding.length);
