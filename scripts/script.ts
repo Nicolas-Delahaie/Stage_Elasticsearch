@@ -1,6 +1,6 @@
 import fs from "fs";
 import { Client } from "@elastic/elasticsearch";
-import { embeddingApi } from "./embeddingss";
+import { embeddingApi } from "./embeddings";
 import { cleaner } from "./cleaner";
 const stopwords = require("stopwords-fr");
 
