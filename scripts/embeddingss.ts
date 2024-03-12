@@ -5,7 +5,7 @@ const MODEL_NAME = "text-embedding-3-small";
 const EMBED_DIMS = 256;
 
 // ----------------- FONCTIONS ----------------- //
-async function embedding_generation(texts: string[]) {
+export async function embeddings_generation(texts: string[]) {
   const response = await fetch("https://api.openai.com/v1/embeddings", {
     headers: {
       Authorization:

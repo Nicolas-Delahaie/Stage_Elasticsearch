@@ -1,5 +1,6 @@
 import fs from "fs";
 import { Client } from "@elastic/elasticsearch";
+export { embeddings_generation } from "./embeddingss";
 
 type T_sku = {
   skuGuid: string;
