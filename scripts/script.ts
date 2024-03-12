@@ -1,17 +1,21 @@
 import fs from "fs";
 import { Client } from "@elastic/elasticsearch";
-export { embeddings_generation } from "./embeddingss";
+import { embeddingApi } from "./embeddingss";
+import { cleaner } from "./cleaner";
+const stopwords = require("stopwords-fr");
 
-type T_sku = {
+type Langues = "fr" | "es" | "en" | "ge";
+export type T_sku = {
   skuGuid: string;
-  skuName: string;
-  skuDescription: string;
+  skuName: Partial<Record<Langues, string>>;
+  skuDescription: Partial<Record<Langues, string>>;
+  nameEmbedding?: number[];
+  descriptionEmbedding?: number[];
 };
-
-const RESULTS_SIZE = 100;
 
 class Elasticsearch extends Client {
   public readonly INDEX_NAME: string = "skus";
+  public readonly EMBED_DIMS = 256 * 6;
 
   constructor() {
     super({
@@ -33,15 +37,16 @@ class Elasticsearch extends Client {
 
   public async Initialisation() {
     try {
-      await this.deleteIndex();
       await this.createIndex();
-      await this.indexDocuments(5);
+      await this.indexDocuments(200);
+
       console.log("Initialisation reussie !");
     } catch (error) {
       console.error(error);
     }
   }
-  private async deleteIndex() {
+  private async createIndex() {
+    // Suppression ancien index
     const existeDeja = await this.indices.exists({
       index: this.INDEX_NAME,
     });
@@ -53,11 +58,11 @@ class Elasticsearch extends Client {
       });
 
       if (!res.acknowledged) {
-        throw new Error("Suppression ancien index raté");
+        throw Error("Suppression ancien index raté");
       }
     }
-  }
-  private async createIndex() {
+
+    // Creation
     const res = await this.indices.create({
       index: this.INDEX_NAME,
       body: {
@@ -80,10 +85,15 @@ class Elasticsearch extends Client {
                 ge: { type: "text", analyzer: "german" },
               },
             },
-            embedding: {
+            nameEmbedding: {
               type: "dense_vector",
-              dims: 2,
-              index: true,
+              dims: this.EMBED_DIMS,
+              similarity: "cosine", // Le vecteur est normalise donc la similarite cosinus suffit (pas besoins de normaliser la magnitude)
+            },
+            descriptionEmbedding: {
+              type: "dense_vector",
+              dims: this.EMBED_DIMS,
+              similarity: "cosine", // Le vecteur est normalise donc la similarite cosinus suffit (pas besoins de normaliser la magnitude)
             },
           },
         },
@@ -115,55 +125,56 @@ class Elasticsearch extends Client {
     });
 
     if (!res.acknowledged) {
-      throw new Error("Création index ratée");
+      throw Error("Création index ratée");
     }
-  }
-  private cleaner(text: string) {
-    const regexPromos =
-      /(\* Offre de bienvenue 5% de réduction sur votre 1ère commande avec le code: PROMO5)|(- Offre -5%)|(A partir [0-9]+ € D'ACHAT = [0-9]+% DE REMISE-code promo OFFRE[0-9]+)|(Offre de Bienvenue : 5% avec le code promo : PROMO5)|(DERNIÈRE DEMARQUE -10% SUPPLEMENTAIRES.*AVEC LE CODE PROMO : 10)/;
-    const regexDimensions = /[0-9]+x[0-9]+( cm)?/;
-    const regexBalises = /<[^>]*>/g;
-    const regexNombres = /[0-9]+ ?(€|°|%)?/g;
-    text = text.replace(regexPromos, "");
-    text = text.replace(regexDimensions, "");
-    text = text.replace(regexBalises, " ");
-    text = text.replace(regexNombres, "");
-    return text;
   }
   private async indexDocuments(docsNumber?: number | undefined) {
     const skusFile = fs.readFileSync("exemple_donnees.json", "utf8");
     const skusBrut = JSON.parse(skusFile).skus as any[];
-    const skus = skusBrut.map((sku) => ({
-      skuGuid: sku.skuGuid,
-      skuDescription: {
-        ...sku.skuDescription,
-        fr: this.cleaner(sku.skuDescription.fr ?? ""),
-      },
-      skuName: {
-        ...sku.skuName,
-        fr: this.cleaner(sku.skuName.fr ?? ""),
-      },
-    }));
 
+    // Troncature
     if (docsNumber) {
-      skus.splice(docsNumber);
+      skusBrut.splice(docsNumber);
     }
 
+    // Regex pour filter mauvais caracteres
+    let skus = cleaner(skusBrut);
+
+    // Creation des phrases nettoyees pour faire les embeddings
+    const flattenedNames = await Promise.all(
+      skus.map(async (sku) => await this.flattening(sku.skuName.fr))
+    );
+    const flattenedDescriptions = await Promise.all(
+      skus.map(async (sku) => await this.flattening(sku.skuDescription.fr))
+    );
+
+    // Creation des embeddings
+    const nameEmbeddings = await embeddingApi(flattenedNames, this.EMBED_DIMS);
+    const descriptionEmbeddings = await embeddingApi(
+      flattenedDescriptions,
+      this.EMBED_DIMS
+    );
+
+    // Formattage du body
     let operations: any[] = [];
-    skus.forEach((sku: T_sku) => {
+    skus.forEach((sku: T_sku, i) => {
       operations.push({ create: { _index: this.INDEX_NAME } });
-      operations.push(sku);
+      operations.push({
+        ...sku,
+        nameEmbedding: nameEmbeddings[i],
+        descriptionEmbedding: descriptionEmbeddings[i],
+      });
     });
 
+    // Envoi de la requete
     const res = await this.bulk({
       refresh: true,
-      /**@todo intégrer un analyseur */
       operations: operations,
     });
-    console.log(res);
 
+    // Analyse du resultat
     if (res.errors) {
-      throw new Error(
+      throw Error(
         "Indexation ratée : " +
           res.took +
           " documents indexés sur " +
@@ -171,37 +182,26 @@ class Elasticsearch extends Client {
       );
     }
   }
-  private async generateEmbeddings() {}
-
-  // TESTING
-  public async testSearch() {
-    return await this.search({
-      index: this.INDEX_NAME,
-      query: {
-        bool: {
-          must: [
-            {
-              multi_match: { query: "lit", fields: ["name", "description"] },
-            },
-          ],
-        },
+  public async flattening(text: string) {
+    // Envoi
+    const res = await etk.indices.analyze({
+      index: etk.INDEX_NAME,
+      body: {
+        text,
+        analyzer: "embedding_analyzer",
       },
-      // aggs: {
-      //   "weight-agg": {
-      //     range: {
-      //       field: "weight",
-      //       ranges: [
-      //         { from: 0, to: 10 },
-      //         { from: 10, to: 20 },
-      //         { from: 10, to: 30 },
-      //         { from: 10, to: 40 },
-      //       ],
-      //     },
-      //   },
-      // },
-      size: RESULTS_SIZE,
-      from: RESULTS_SIZE * 0,
     });
+
+    // Analyse
+    if (!res.tokens) {
+      throw Error("Analyseur d'embedding a écouché");
+    }
+
+    // Formattage
+    const tokens = res.tokens.map((token) => token.token);
+    const tokensJoined = tokens.join(" ");
+
+    return tokensJoined;
   }
 }
 
@@ -209,22 +209,29 @@ const etk = new Elasticsearch();
 (async () => {
   await etk.Initialisation();
 
-  /* Getters */
+  const queryEmbedding = (
+    await embeddingApi(["table solide"], etk.EMBED_DIMS)
+  )[0];
+  console.log(
+    (
+      await etk.search({
+        knn: {
+          field: "descriptionEmbedding",
+          k: 3,
+          num_candidates: 1000,
+          query_vector: queryEmbedding,
+          boost: 1,
+        },
+      })
+    ).hits.hits[0]
+  );
+
+  // console.log(
+  //   (await etk.indices.getSettings({ index: "_all" }))?.skus.settings?.index
+  //     ?.analysis?.analyzer
+  // );
+
   // console.log((await client.indices.get({ index: INDEX_NAME }))[INDEX_NAME]);
-  // console.log((await client.indices.getMapping()).skus);
-  // console.log(
-  //   (await etk.indices.getSettings({ index: "_all" }))?.skus?.settings?.index
-  // );
-  // console.log((await searchSkus()).hits.hits);
-  // console.log(
-  //   (
-  //     await etk.termvectors({
-  //       index: etk.INDEX_NAME,
-  //       id: "UarZLI4Bq2pXlB88xHEN",
-  //       fields: ["description", "name"],
-  //     })
-  //   ).term_vectors?.description?.terms
-  // );
 
   // console.log(
   //   (
@@ -241,29 +248,10 @@ const etk = new Elasticsearch();
   //   ).tokens?.map((token) => token.token)
   // );
 
-  async function embeddingAnalyzer(texts: string[]) {
-    const tokensPromises = texts.map(async (text) => {
-      const res = await etk.indices.analyze({
-        index: etk.INDEX_NAME,
-        body: {
-          text,
-          analyzer: "embedding_analyzer",
-        },
-      });
-      if (!res.tokens) {
-        throw new Error("Analyseur d'embedding a écouché");
-      }
-      const tokens = res.tokens.map((token) => token.token);
-      const tokensJoined = tokens.join(" ");
-      return tokensJoined;
-    });
-    return await Promise.all(tokensPromises);
-  }
-
   const texts = [
-    "Essentiel pour préserver son matelas, l'alèse spécialement adaptée au matelas berceau TROLL. Coloris écru.  coton waterproof, intérieur  polyester, bordures avec élastique   Lavable en machine à   ",
-    "Flèche de lit Universelle Troll Nursery. Elle s'adapte à tous les berceaux et lits bébé Troll Nursery (à l'exception des berceaux textile).  Réglable en hauteur. Tube en acier laqué blanc avec pinces crocodile.  A associer au voile universel Troll (même rubrique)",
+    "Essentiel Essentiel Essentiel Essentiel pour préserver son matelas, Essentiel Essentiel Essentiel Essentiel Essentiel l'alèse spécialement adaptée au matelas Essentiel berceau TROLL. Coloris écru.  coton waterproof, intérieur  polyester, bordures avec élastique   Lavable en machine à   ",
+    // "Flèche de lit Universelle Troll Nursery. Elle s'adapte à tous les berceaux et lits bébé Troll Nursery (à l'exception des berceaux textile).  Réglable en hauteur. Tube en acier laqué blanc avec pinces crocodile.  A associer au voile universel Troll (même rubrique)",
   ];
 
-  console.log(await embeddingAnalyzer(texts));
+  // console.log(await etk.stringAnalyzerForEmbedding(texts));
 })();
