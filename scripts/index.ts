@@ -37,15 +37,17 @@ export class Elasticsearch extends Client {
   public async Initialisation() {
     try {
       await this.createIndex();
-      await this.indexDocuments(200);
-
-      console.log("Initialisation reussie !");
+      console.log("\u2705 Création index");
+      await this.indexSkus(200);
+      console.log("\u2705 Indexation reussie");
     } catch (error) {
-      console.error(error);
+      console.error("\u274C Initialisation ratée :");
+      throw error;
     }
   }
   private async createIndex() {
     // Suppression ancien index
+    console.log("...Suppression de l'index");
     const existeDeja = await this.indices.exists({
       index: this.INDEX_NAME,
     });
@@ -57,11 +59,12 @@ export class Elasticsearch extends Client {
       });
 
       if (!res.acknowledged) {
-        throw Error("Suppression ancien index raté");
+        throw Error("suppression ancien index raté");
       }
     }
 
     // Creation
+    console.log("...Création de l'index");
     const res = await this.indices.create({
       index: this.INDEX_NAME,
       body: {
@@ -96,47 +99,24 @@ export class Elasticsearch extends Client {
             },
           },
         },
-        //   settings: {
-        //     analysis: {
-        //       analyzer: {
-        //         embedding_analyzer: {
-        //           type: "custom",
-        //           tokenizer: "standard",
-        //           filter: [
-        //             "french_stop_words",
-        //             "asciifolding",
-        //             "remove_duplicates",
-        //             "lowercase",
-        //             "elision",
-        //           ],
-        //         },
-        //       },
-        //       filter: {
-        //         french_stop_words: {
-        //           type: "stop",
-        //           ignore_case: true,
-        //           stopwords: ["_french_"],
-        //         },
-        //       },
-        //     },
-        //   },
       },
     });
 
     if (!res.acknowledged) {
-      throw Error("Création index ratée");
+      throw Error("création index ratée");
     }
   }
-  private async indexDocuments(docsNumber?: number | undefined) {
-    const skusFile = fs.readFileSync("exemple_donnees.json", "utf8");
+  private async indexSkus(docsNumber?: number | undefined) {
+    const skusFile = fs.readFileSync("exemple_donnees2.json", "utf8");
     const skusBrut = JSON.parse(skusFile).skus as any[];
 
-    // Troncature
+    // -- Reduction du nombre de produits --
     if (docsNumber) {
       skusBrut.splice(docsNumber);
     }
 
-    // Regex pour filter mauvais caracteres
+    //  -- Uniformisation des documents --
+    console.log("...Uniformisation des documents");
     let skus = skusBrut.map((sku) => ({
       /**@todo gerer l ingeratin d une autre langue s il n y a pas de francais */
       /**@todo gerer le flatening des autres langues */
@@ -151,17 +131,19 @@ export class Elasticsearch extends Client {
       },
     }));
 
-    // Creation des embeddings par bulk
-    const frNameEmbeddings = await embeddingApi(
-      skus.map((sku) => sku.skuName.fr),
-      this.EMBED_DIMS
-    );
+    // -- Creation des embeddings par bulk --
+    console.log("...Création des embeddings");
     const frDescriptionEmbeddings = await embeddingApi(
       skus.map((sku) => sku.skuDescription.fr),
       this.EMBED_DIMS
     );
+    const frNameEmbeddings = await embeddingApi(
+      skus.map((sku) => sku.skuName.fr),
+      this.EMBED_DIMS
+    );
 
-    // Formattage du body
+    // -- Indexation --
+    console.log("...Indexation des documents");
     let operations: any[] = [];
     skus.forEach((sku: T_sku, i) => {
       operations.push({ create: { _index: this.INDEX_NAME } });
@@ -171,17 +153,15 @@ export class Elasticsearch extends Client {
         descriptionEmbedding: frDescriptionEmbeddings[i],
       });
     });
-
-    // Envoi de la requete
     const res = await this.bulk({
       refresh: true,
       operations: operations,
     });
 
-    // Analyse du resultat
+    // -- Analyse du resultat --
     if (res.errors) {
       throw Error(
-        "Indexation ratée : " +
+        "indexation ratée : " +
           res.took +
           " documents indexés sur " +
           skus.length
@@ -192,18 +172,19 @@ export class Elasticsearch extends Client {
 
 const els = new Elasticsearch();
 (async () => {
-  await els.Initialisation();
+  // await els.Initialisation();
 
   // flattening(
   //   " J'éspère qu'il est fort Le kit de conversion Sparrowlit accompagnera votre enfant du litlit bébé lit au lit junior. Il remplace les lit barreaux sur un lit des côté lit du lit lit. litGrâce lit à lit la lit hauteur du sommier de ,cm, votre enfant pourra monter et descendre de son lit comme un grand. Vous pourrez ainsi le voir évoluer vers l'autonomie sans risque de chute. L’ensemble de la gamme Œuf est réputé pour son esthétisme et son élégance. Elle assure une qualité et une finition irréprochables dans le respect de l'environnement. Cela va du choix de ses matériaux, aux processus de fabrication, mais aussi à la sélection des emballages lit lit lit lit lit lit lit recyclés."
   // );
 
   // const queryEmbedding = (
-  //   await embeddingApi(["table solide"], etk.EMBED_DIMS)
+  //   await embeddingApi(["habillement"], els.EMBED_DIMS)
   // )[0];
+
   // console.log(
   //   (
-  //     await etk.search({
+  //     await els.search({
   //       knn: {
   //         field: "descriptionEmbedding",
   //         k: 3,
