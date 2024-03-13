@@ -2,7 +2,6 @@ import fs from "fs";
 import { Client } from "@elastic/elasticsearch";
 import { embeddingApi } from "./embeddings";
 import { cleaner } from "./cleaner";
-const stopwords = require("stopwords-fr");
 
 type Langues = "fr" | "es" | "en" | "ge";
 export type T_sku = {
@@ -13,7 +12,7 @@ export type T_sku = {
   descriptionEmbedding?: number[];
 };
 
-class Elasticsearch extends Client {
+export class Elasticsearch extends Client {
   public readonly INDEX_NAME: string = "skus";
   public readonly EMBED_DIMS = 256 * 6;
 
@@ -97,30 +96,30 @@ class Elasticsearch extends Client {
             },
           },
         },
-        settings: {
-          analysis: {
-            analyzer: {
-              embedding_analyzer: {
-                type: "custom",
-                tokenizer: "standard",
-                filter: [
-                  "french_stop_words",
-                  "asciifolding",
-                  "remove_duplicates",
-                  "lowercase",
-                  "elision",
-                ],
-              },
-            },
-            filter: {
-              french_stop_words: {
-                type: "stop",
-                ignore_case: true,
-                stopwords: ["_french_"],
-              },
-            },
-          },
-        },
+        //   settings: {
+        //     analysis: {
+        //       analyzer: {
+        //         embedding_analyzer: {
+        //           type: "custom",
+        //           tokenizer: "standard",
+        //           filter: [
+        //             "french_stop_words",
+        //             "asciifolding",
+        //             "remove_duplicates",
+        //             "lowercase",
+        //             "elision",
+        //           ],
+        //         },
+        //       },
+        //       filter: {
+        //         french_stop_words: {
+        //           type: "stop",
+        //           ignore_case: true,
+        //           stopwords: ["_french_"],
+        //         },
+        //       },
+        //     },
+        //   },
       },
     });
 
@@ -138,20 +137,27 @@ class Elasticsearch extends Client {
     }
 
     // Regex pour filter mauvais caracteres
-    let skus = cleaner(skusBrut);
+    let skus = skusBrut.map((sku) => ({
+      /**@todo gerer l ingeratin d une autre langue s il n y a pas de francais */
+      /**@todo gerer le flatening des autres langues */
+      skuGuid: sku.skuGuid,
+      skuDescription: {
+        ...sku.skuDescription,
+        fr: cleaner(sku.skuDescription.fr ?? ""),
+      },
+      skuName: {
+        ...sku.skuName,
+        fr: cleaner(sku.skuName.fr ?? ""),
+      },
+    }));
 
-    // Creation des phrases nettoyees pour faire les embeddings
-    const flattenedNames = await Promise.all(
-      skus.map(async (sku) => await this.flattening(sku.skuName.fr))
+    // Creation des embeddings par bulk
+    const frNameEmbeddings = await embeddingApi(
+      skus.map((sku) => sku.skuName.fr),
+      this.EMBED_DIMS
     );
-    const flattenedDescriptions = await Promise.all(
-      skus.map(async (sku) => await this.flattening(sku.skuDescription.fr))
-    );
-
-    // Creation des embeddings
-    const nameEmbeddings = await embeddingApi(flattenedNames, this.EMBED_DIMS);
-    const descriptionEmbeddings = await embeddingApi(
-      flattenedDescriptions,
+    const frDescriptionEmbeddings = await embeddingApi(
+      skus.map((sku) => sku.skuDescription.fr),
       this.EMBED_DIMS
     );
 
@@ -161,8 +167,8 @@ class Elasticsearch extends Client {
       operations.push({ create: { _index: this.INDEX_NAME } });
       operations.push({
         ...sku,
-        nameEmbedding: nameEmbeddings[i],
-        descriptionEmbedding: descriptionEmbeddings[i],
+        nameEmbedding: frNameEmbeddings[i],
+        descriptionEmbedding: frDescriptionEmbeddings[i],
       });
     });
 
@@ -182,49 +188,32 @@ class Elasticsearch extends Client {
       );
     }
   }
-  public async flattening(text: string) {
-    // Envoi
-    const res = await etk.indices.analyze({
-      index: etk.INDEX_NAME,
-      body: {
-        text,
-        analyzer: "embedding_analyzer",
-      },
-    });
-
-    // Analyse
-    if (!res.tokens) {
-      throw Error("Analyseur d'embedding a écouché");
-    }
-
-    // Formattage
-    const tokens = res.tokens.map((token) => token.token);
-    const tokensJoined = tokens.join(" ");
-
-    return tokensJoined;
-  }
 }
 
-const etk = new Elasticsearch();
+const els = new Elasticsearch();
 (async () => {
-  await etk.Initialisation();
+  await els.Initialisation();
 
-  const queryEmbedding = (
-    await embeddingApi(["table solide"], etk.EMBED_DIMS)
-  )[0];
-  console.log(
-    (
-      await etk.search({
-        knn: {
-          field: "descriptionEmbedding",
-          k: 3,
-          num_candidates: 1000,
-          query_vector: queryEmbedding,
-          boost: 1,
-        },
-      })
-    ).hits.hits[0]
-  );
+  // flattening(
+  //   " J'éspère qu'il est fort Le kit de conversion Sparrowlit accompagnera votre enfant du litlit bébé lit au lit junior. Il remplace les lit barreaux sur un lit des côté lit du lit lit. litGrâce lit à lit la lit hauteur du sommier de ,cm, votre enfant pourra monter et descendre de son lit comme un grand. Vous pourrez ainsi le voir évoluer vers l'autonomie sans risque de chute. L’ensemble de la gamme Œuf est réputé pour son esthétisme et son élégance. Elle assure une qualité et une finition irréprochables dans le respect de l'environnement. Cela va du choix de ses matériaux, aux processus de fabrication, mais aussi à la sélection des emballages lit lit lit lit lit lit lit recyclés."
+  // );
+
+  // const queryEmbedding = (
+  //   await embeddingApi(["table solide"], etk.EMBED_DIMS)
+  // )[0];
+  // console.log(
+  //   (
+  //     await etk.search({
+  //       knn: {
+  //         field: "descriptionEmbedding",
+  //         k: 3,
+  //         num_candidates: 1000,
+  //         query_vector: queryEmbedding,
+  //         boost: 1,
+  //       },
+  //     })
+  //   ).hits.hits[0]
+  // );
 
   // console.log(
   //   (await etk.indices.getSettings({ index: "_all" }))?.skus.settings?.index
