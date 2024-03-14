@@ -1,16 +1,24 @@
 const MODEL_NAME = "text-embedding-3-small";
 
-export async function embeddingApi(texts: string[], dimensions: number) {
-  const CHARS_IN_A_TOKEN = 10; // Moyenne de nombre de caracteres par token
+export async function bulkEmbeddingApi(texts: string[], dimensions: number, debug?: boolean) {
+  /**@todo valeurs a definir */
+  const CHARS_IN_A_TOKEN = 200; // Moyenne de nombre de caracteres par token
   const MAX_TOKENS_PER_SECTION = 8000; // Arrondi de 8191
   const MAX_CHARS_PER_SECTION = MAX_TOKENS_PER_SECTION * CHARS_IN_A_TOKEN;
   const SECTION_RATIO_REDUCTION = 6;
+
+  // Gestion des texts vides (genere une erreur dans l api)
+  const emptyTextsIndices = texts
+    .map((text, i) => (text === "" ? i : null)) // Remplacement des textes vides par des null
+    .filter((indice) => indice !== null) as number[]; // Suppression des null
+
+  texts = texts.filter((text) => text !== "");
 
   let charCounter = 0;
   let iLastSectionText = 0;
   let lastRequestFailed = false;
   let reductionIncrement = undefined;
-  let embeddings: number[][] = [];
+  let embeddings: (number[] | null)[] = [];
   while (texts.length !== 0) {
     if (!lastRequestFailed) {
       const textLength = texts[iLastSectionText].length;
@@ -23,7 +31,7 @@ export async function embeddingApi(texts: string[], dimensions: number) {
       const section = texts.slice(0, iLastSectionText + 1);
       const others = texts.slice(iLastSectionText + 1);
       const res = await requestEmbeddingApi(section, dimensions);
-      // /**@todo INTEGRER L AJOUT DANS ELASTIC SEARCH ICI (pour ne pas faire des embeddings pour rien au cas ou une section fasse planter) */
+      /**@todo Gerer la sauvegarde des donnees au cas ou ca plante */
       if (res.success) {
         // Stockages des embeddings
         embeddings.push(...res.data);
@@ -36,10 +44,9 @@ export async function embeddingApi(texts: string[], dimensions: number) {
         // Reduction des textes restants a envoyer
         texts = others;
         iLastSectionText = 0;
-        console.log("\u2705 ", section.length, " embeddings générés !");
+        debug && console.log("\u2705 ", section.length, " embeddings générés !");
       } else {
         const typeErreur = res.error.type;
-        console.log(res.error);
         if (typeErreur === "invalid_request_error") {
           // Tant que la section ne peut pas etre envoyee, elle est reduite
           lastRequestFailed = true;
@@ -52,7 +59,7 @@ export async function embeddingApi(texts: string[], dimensions: number) {
           if (iLastSectionText <= 0) {
             throw Error('Erreur "' + res.error.type + '" :' + res.error.message);
           }
-          console.log("<-- Trop grand nombre de tokens pour l'API d'OpenAI : reduction des donnees a envoyer a ", iLastSectionText);
+          debug && console.log("<-- Trop grand nombre de tokens pour l'API d'OpenAI : reduction des donnees a envoyer a ", iLastSectionText);
         } else if (typeErreur === "rate_limit_error") {
           throw Error('Erreur "' + res.error.type + '" :' + "Impossible de continuer, nombre de requetes max autorisées par OpenAI atteint");
         } else if (typeErreur === "internal_server_error " || typeErreur === "service_unavailable") {
@@ -65,6 +72,11 @@ export async function embeddingApi(texts: string[], dimensions: number) {
       iLastSectionText++;
     }
   }
+
+  // Re insertion des textes vides
+  emptyTextsIndices.map((i) => {
+    embeddings.splice(i, 0, null);
+  });
 
   return embeddings;
 }
@@ -147,15 +159,18 @@ async function testSimiliarite() {
 }
 
 async function test() {
-  let texts;
   // texts = [...Array(1000).fill("Coucou ça va ou quoiiiii ?"), ...Array(3000).fill("Okkk"), ...Array(1000).fill("Bonjour je m'appelle patate")]; // 1600 x 5 = 8000 tokens
   // console.log("Resultat : ", (await embeddingApi(texts, 3)).length, " embeddings");
   // if (!embeddings.success) {
   //   console.log(embeddings.error.message.match(/^\D*\d+\D+(\d+)/)?.[1]);
   // }
-  texts = ["Coucou", "bhiuh", "huighuih", "iljpo", "hju"];
-  texts = texts.slice(5).length;
+  let texts = ["Coucou", "bhiuh", "huighuih", "iljpo", "hju", "jugui", "hbihu", "uhuihi_o"] as (string | null)[];
+  const emptyTextsIndices = [1, 3, 4, 7];
+  emptyTextsIndices.map((i) => {
+    texts.splice(i, 0, null);
+  });
+
   console.log(texts);
 }
 
-// testSimiliarite();
+// test();

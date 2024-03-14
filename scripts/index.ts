@@ -1,6 +1,6 @@
 import fs from "fs";
 import { Client } from "@elastic/elasticsearch";
-import { embeddingApi } from "./embeddings";
+import { bulkEmbeddingApi } from "./bulkEmbeddingApi";
 import { cleaner } from "./cleaner";
 
 type Langues = "fr" | "es" | "en" | "ge";
@@ -15,6 +15,7 @@ export type T_sku = {
 export class Elasticsearch extends Client {
   public readonly INDEX_NAME: string = "skus";
   public readonly EMBED_DIMS = 256 * 6;
+  public readonly __DEBUG__ = true
 
   constructor() {
     super({
@@ -38,7 +39,7 @@ export class Elasticsearch extends Client {
     try {
       await this.createIndex();
       console.log("\u2705 Création index");
-      await this.indexSkus(200);
+      await this.indexSkus();
       console.log("\u2705 Indexation reussie");
     } catch (error) {
       console.error("\u274C Initialisation ratée :");
@@ -107,7 +108,7 @@ export class Elasticsearch extends Client {
     }
   }
   private async indexSkus(docsNumber?: number | undefined) {
-    const skusFile = fs.readFileSync("exemple_donnees2.json", "utf8");
+    const skusFile = fs.readFileSync("exemple_donnees.json", "utf8");
     const skusBrut = JSON.parse(skusFile).skus as any[];
 
     // -- Reduction du nombre de produits --
@@ -132,14 +133,16 @@ export class Elasticsearch extends Client {
     }));
 
     // -- Creation des embeddings par bulk --
-    console.log("...Création des embeddings");
-    const frDescriptionEmbeddings = await embeddingApi(
+    console.log("...Generation des embeddings");
+    const frDescriptionEmbeddings = await bulkEmbeddingApi(
       skus.map((sku) => sku.skuDescription.fr),
-      this.EMBED_DIMS
+      this.EMBED_DIMS,
+      this.__DEBUG__
     );
-    const frNameEmbeddings = await embeddingApi(
+    const frNameEmbeddings = await bulkEmbeddingApi(
       skus.map((sku) => sku.skuName.fr),
-      this.EMBED_DIMS
+      this.EMBED_DIMS,
+      this.__DEBUG__
     );
 
     // -- Indexation --
@@ -160,19 +163,14 @@ export class Elasticsearch extends Client {
 
     // -- Analyse du resultat --
     if (res.errors) {
-      throw Error(
-        "indexation ratée : " +
-          res.took +
-          " documents indexés sur " +
-          skus.length
-      );
+      throw Error("indexation ratée : " + res.took + " documents indexés sur " + skus.length);
     }
   }
 }
 
 const els = new Elasticsearch();
 (async () => {
-  // await els.Initialisation();
+  await els.Initialisation();
 
   // flattening(
   //   " J'éspère qu'il est fort Le kit de conversion Sparrowlit accompagnera votre enfant du litlit bébé lit au lit junior. Il remplace les lit barreaux sur un lit des côté lit du lit lit. litGrâce lit à lit la lit hauteur du sommier de ,cm, votre enfant pourra monter et descendre de son lit comme un grand. Vous pourrez ainsi le voir évoluer vers l'autonomie sans risque de chute. L’ensemble de la gamme Œuf est réputé pour son esthétisme et son élégance. Elle assure une qualité et une finition irréprochables dans le respect de l'environnement. Cela va du choix de ses matériaux, aux processus de fabrication, mais aussi à la sélection des emballages lit lit lit lit lit lit lit recyclés."
