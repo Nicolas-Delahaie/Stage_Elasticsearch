@@ -19,7 +19,7 @@ export async function bulkEmbeddingApi(texts: string[], dimensions: number, type
   let iLastSectionText = 0;
   let lastRequestFailed = false;
   let reductionIncrement = undefined;
-  let embeddings: (number[] | null)[] = [];
+  let embeddings: (number[] | undefined)[] = [];
   while (texts.length !== 0) {
     if (!lastRequestFailed) {
       const textLength = texts[iLastSectionText].length;
@@ -45,7 +45,7 @@ export async function bulkEmbeddingApi(texts: string[], dimensions: number, type
         lastRequestFailed = false;
         reductionIncrement = undefined;
         texts = others;
-        debug && console.log("   \u2705 ", section.length, " embeddings générés !");
+        debug && console.log("   \u2705", section.length, "embeddings générés !");
       } else {
         const typeErreur = res.error.type;
         if (typeErreur === "invalid_request_error") {
@@ -60,7 +60,7 @@ export async function bulkEmbeddingApi(texts: string[], dimensions: number, type
           if (iLastSectionText <= 0) {
             throw Error('Erreur "' + res.error.type + '" :' + res.error.message);
           }
-          debug && console.log("   <-- Trop grand nombre de tokens pour l'API d'OpenAI : reduction des donnees a envoyer a ", iLastSectionText);
+          debug && console.log("   <-- Reduction des donnees envoyees a", iLastSectionText, "(trop grand OpenAI sinon)");
         } else if (typeErreur === "rate_limit_error") {
           throw Error('Erreur "' + res.error.type + '" :' + "Impossible de continuer, nombre de requetes max autorisées par OpenAI atteint");
         } else if (typeErreur === "internal_server_error " || typeErreur === "service_unavailable") {
@@ -76,7 +76,7 @@ export async function bulkEmbeddingApi(texts: string[], dimensions: number, type
 
   // Re insertion des textes vides
   emptyTextsIndices.map((i) => {
-    embeddings.splice(i, 0, null);
+    embeddings.splice(i, 0, undefined);
   });
 
   return embeddings;
