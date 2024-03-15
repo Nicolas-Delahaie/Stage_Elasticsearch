@@ -146,7 +146,14 @@ function storeTokenCount(tokenCount: number, isNew = false, type?: string) {
   }
 
   const FILE_NAME = "tokenUse.json";
-  let uses = JSON.parse(fs.readFileSync(FILE_NAME, "utf8")) as use[];
+  let uses: use[];
+  try {
+    uses = JSON.parse(fs.readFileSync(FILE_NAME, "utf8"));
+  } catch (e) {
+    console.log("   création du fichier tokenUse.json");
+    uses = [];
+  }
+
   if (isNew && type) {
     const now = new Date();
     uses.push({ date: now.toISOString(), counter: tokenCount, type });
