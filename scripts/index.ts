@@ -37,7 +37,7 @@ export class Elasticsearch extends Client {
   }
 
   public async Initialisation() {
-    const skusFile = fs.readFileSync("exemple_donnees.json", "utf8");
+    const skusFile = fs.readFileSync("exemple_donnees_big.json", "utf8");
     const skusBrut = JSON.parse(skusFile).skus as any[];
 
     try {
