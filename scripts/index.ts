@@ -8,14 +8,14 @@ export type T_sku = {
   skuGuid: string;
   skuName: Partial<Record<Langues, string>>;
   skuDescription: Partial<Record<Langues, string>>;
-  nameEmbedding?: number[];
-  descriptionEmbedding?: number[];
+  nameEmbedding: number[] | null;
+  descriptionEmbedding: number[] | null;
 };
 
 export class Elasticsearch extends Client {
   public readonly INDEX_NAME: string = "skus";
   public readonly EMBED_DIMS = 256 * 6;
-  public readonly SKUS_BULK_LIMIT = 1000;
+  public readonly SKUS_BULK_LIMIT = 10000; // ce nombre est arbitraire et depend de la taille des donnes (nom, description et surtout dimension embedding)
   public readonly __DEBUG__ = true;
 
   constructor() {
@@ -37,7 +37,7 @@ export class Elasticsearch extends Client {
   }
 
   public async Initialisation() {
-    const skusFile = fs.readFileSync("exemple_donnees_big.json", "utf8");
+    const skusFile = fs.readFileSync("exemple_donnees.json", "utf8");
     const skusBrut = JSON.parse(skusFile).skus as any[];
 
     try {
@@ -120,19 +120,18 @@ export class Elasticsearch extends Client {
 
     //  -- Uniformisation des documents --
     console.log("...Uniformisation des documents");
-    const skus: T_sku[] = jsonInput.map((sku) => ({
-      /**@todo gerer l ingeration d une autre langue s il n y a pas de francais */
-      /**@todo gerer le flatening des autres langues */
+    const cleanSkus = jsonInput.map((sku) => ({
+      // Reduction et traitement des attributs
       skuGuid: sku.skuGuid,
       skuDescription: {
         en: sku.skuDescription.en && cleaner(sku.skuDescription.en),
-        fr: sku.skuDescription.fr && cleaner(sku.skuDescription.fr),
+        fr: sku.skuDescription.fr && cleaner(sku.skuDescription.fr, true),
         es: sku.skuDescription.es && cleaner(sku.skuDescription.es),
         ge: sku.skuDescription.ge && cleaner(sku.skuDescription.ge),
       },
       skuName: {
         en: sku.skuName.en && cleaner(sku.skuName.en),
-        fr: sku.skuName.fr && cleaner(sku.skuName.fr),
+        fr: sku.skuName.fr && cleaner(sku.skuName.fr, true),
         es: sku.skuName.es && cleaner(sku.skuName.es),
         ge: sku.skuName.ge && cleaner(sku.skuName.ge),
       },
@@ -142,20 +141,20 @@ export class Elasticsearch extends Client {
     console.log("...Generation des embeddings");
     const nomClient = jsonInput[0]?.skuChannelNameCollection as string;
     const frDescriptionEmbeddings = await bulkEmbeddingApi(
-      skus.map((sku) => sku.skuDescription.fr ?? ""),
+      cleanSkus.map((sku) => sku.skuDescription.fr ?? ""),
       this.EMBED_DIMS,
       nomClient + " : decriptions",
       this.__DEBUG__
     );
     const frNameEmbeddings = await bulkEmbeddingApi(
-      skus.map((sku) => sku.skuName.fr ?? ""),
+      cleanSkus.map((sku) => sku.skuName.fr ?? ""),
       this.EMBED_DIMS,
       nomClient + " : titres",
       this.__DEBUG__
     );
 
     // -- Recomposition des produits avec leur embedding
-    const skusWithEmbeddings: T_sku[] = skus.map((sku, i) => ({
+    const skus: T_sku[] = cleanSkus.map((sku, i) => ({
       ...sku,
       nameEmbedding: frNameEmbeddings[i],
       descriptionEmbedding: frDescriptionEmbeddings[i],
@@ -163,7 +162,7 @@ export class Elasticsearch extends Client {
 
     // -- Indexation --
     console.log("...Tentative de stockage en bdd");
-    await this.bulkIndexingApi(skusWithEmbeddings);
+    await this.bulkIndexingApi(skus);
   }
 
   /**
@@ -204,7 +203,7 @@ export class Elasticsearch extends Client {
 
 const els = new Elasticsearch();
 (async () => {
-  await els.Initialisation();
+  // await els.Initialisation();
 
   // flattening(
   //   " J'éspère qu'il est fort Le kit de conversion Sparrowlit accompagnera votre enfant du litlit bébé lit au lit junior. Il remplace les lit barreaux sur un lit des côté lit du lit lit. litGrâce lit à lit la lit hauteur du sommier de ,cm, votre enfant pourra monter et descendre de son lit comme un grand. Vous pourrez ainsi le voir évoluer vers l'autonomie sans risque de chute. L’ensemble de la gamme Œuf est réputé pour son esthétisme et son élégance. Elle assure une qualité et une finition irréprochables dans le respect de l'environnement. Cela va du choix de ses matériaux, aux processus de fabrication, mais aussi à la sélection des emballages lit lit lit lit lit lit lit recyclés."
