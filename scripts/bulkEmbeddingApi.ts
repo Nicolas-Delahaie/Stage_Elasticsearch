@@ -1,8 +1,9 @@
+import fs from "fs";
 const MODEL_NAME = "text-embedding-3-small";
 
-export async function bulkEmbeddingApi(texts: string[], dimensions: number, debug?: boolean) {
+export async function bulkEmbeddingApi(texts: string[], dimensions: number, type: string, debug = false) {
   /**@todo valeurs a definir */
-  const CHARS_IN_A_TOKEN = 200; // Moyenne de nombre de caracteres par token
+  const CHARS_IN_A_TOKEN = 60; // Moyenne de nombre de caracteres par token
   const MAX_TOKENS_PER_SECTION = 8000; // Arrondi de 8191
   const MAX_CHARS_PER_SECTION = MAX_TOKENS_PER_SECTION * CHARS_IN_A_TOKEN;
   const SECTION_RATIO_REDUCTION = 6;
@@ -33,18 +34,18 @@ export async function bulkEmbeddingApi(texts: string[], dimensions: number, debu
       const res = await requestEmbeddingApi(section, dimensions);
       /**@todo Gerer la sauvegarde des donnees au cas ou ca plante */
       if (res.success) {
-        // Stockages des embeddings
+        // Stockages embeddings et tokens utilises
+        const firstCall = embeddings.length === 0;
+        storeTokenCount(res.tokens, firstCall, type);
         embeddings.push(...res.data);
 
-        // Reinitialisation donnees
+        // Mise a jour des variables
         charCounter = 0;
+        iLastSectionText = 0;
         lastRequestFailed = false;
         reductionIncrement = undefined;
-
-        // Reduction des textes restants a envoyer
         texts = others;
-        iLastSectionText = 0;
-        debug && console.log("\u2705 ", section.length, " embeddings générés !");
+        debug && console.log("   \u2705 ", section.length, " embeddings générés !");
       } else {
         const typeErreur = res.error.type;
         if (typeErreur === "invalid_request_error") {
@@ -59,7 +60,7 @@ export async function bulkEmbeddingApi(texts: string[], dimensions: number, debu
           if (iLastSectionText <= 0) {
             throw Error('Erreur "' + res.error.type + '" :' + res.error.message);
           }
-          debug && console.log("<-- Trop grand nombre de tokens pour l'API d'OpenAI : reduction des donnees a envoyer a ", iLastSectionText);
+          debug && console.log("   <-- Trop grand nombre de tokens pour l'API d'OpenAI : reduction des donnees a envoyer a ", iLastSectionText);
         } else if (typeErreur === "rate_limit_error") {
           throw Error('Erreur "' + res.error.type + '" :' + "Impossible de continuer, nombre de requetes max autorisées par OpenAI atteint");
         } else if (typeErreur === "internal_server_error " || typeErreur === "service_unavailable") {
@@ -85,6 +86,7 @@ type resFunction =
   | {
       success: true;
       data: number[][];
+      tokens: number;
     }
   | {
       success: false;
@@ -95,7 +97,7 @@ type resApi =
       objets: string;
       data: { object: string; index: number; embedding: number[] }[];
       model: string;
-      usage?: { prompt_tokens: number; total_tokens: number };
+      usage: { prompt_tokens: number; total_tokens: number };
     }
   | { error: apiError };
 type apiError = { message: string; type: string; param: any; code: any };
@@ -128,9 +130,33 @@ async function requestEmbeddingApi(texts: string[], dimensions: number): Promise
     : {
         success: true,
         data: brutResults.data.map((data) => data.embedding),
+        tokens: brutResults.usage?.total_tokens,
       };
 }
 
+function storeTokenCount(tokenCount: number, isNew = false, type?: string) {
+  type use = {
+    date: string;
+    counter: number;
+    type: string;
+  };
+
+  if (isNew && !type) {
+    throw Error("[storeTokenCount] Erreur : besoins du type ");
+  }
+
+  const FILE_NAME = "tokenUse.json";
+  let uses = JSON.parse(fs.readFileSync(FILE_NAME, "utf8")) as use[];
+  if (isNew && type) {
+    const now = new Date();
+    uses.push({ date: now.toISOString(), counter: tokenCount, type });
+  } else {
+    const iLaterUse = uses.length - 1;
+    uses[iLaterUse].counter += tokenCount;
+  }
+
+  fs.writeFileSync(FILE_NAME, JSON.stringify(uses));
+}
 function cosineSimilarity(vecA: any, vecB: any) {
   let dotProduct = 0;
   let normA = 0;
@@ -159,18 +185,7 @@ async function testSimiliarite() {
 }
 
 async function test() {
-  // texts = [...Array(1000).fill("Coucou ça va ou quoiiiii ?"), ...Array(3000).fill("Okkk"), ...Array(1000).fill("Bonjour je m'appelle patate")]; // 1600 x 5 = 8000 tokens
-  // console.log("Resultat : ", (await embeddingApi(texts, 3)).length, " embeddings");
-  // if (!embeddings.success) {
-  //   console.log(embeddings.error.message.match(/^\D*\d+\D+(\d+)/)?.[1]);
-  // }
-  let texts = ["Coucou", "bhiuh", "huighuih", "iljpo", "hju", "jugui", "hbihu", "uhuihi_o"] as (string | null)[];
-  const emptyTextsIndices = [1, 3, 4, 7];
-  emptyTextsIndices.map((i) => {
-    texts.splice(i, 0, null);
-  });
-
-  console.log(texts);
+  let texts = [...Array(180000).fill("Coucou ça va ou quoiiiii ?")];
+  console.log("Resultat : ", (await bulkEmbeddingApi(texts, 3, "Enorme bulk pour test", true)).length, " embeddings");
 }
-
 // test();

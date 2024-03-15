@@ -15,7 +15,8 @@ export type T_sku = {
 export class Elasticsearch extends Client {
   public readonly INDEX_NAME: string = "skus";
   public readonly EMBED_DIMS = 256 * 6;
-  public readonly __DEBUG__ = true
+  public readonly SKUS_BULK_LIMIT = 1000;
+  public readonly __DEBUG__ = true;
 
   constructor() {
     super({
@@ -36,10 +37,14 @@ export class Elasticsearch extends Client {
   }
 
   public async Initialisation() {
+    const skusFile = fs.readFileSync("exemple_donnees.json", "utf8");
+    const skusBrut = JSON.parse(skusFile).skus as any[];
+
     try {
       await this.createIndex();
-      console.log("\u2705 Création index");
-      await this.indexSkus();
+      console.log("\u2705 Index initialisé");
+
+      await this.indexSkus(skusBrut);
       console.log("\u2705 Indexation reussie");
     } catch (error) {
       console.error("\u274C Initialisation ratée :");
@@ -107,46 +112,50 @@ export class Elasticsearch extends Client {
       throw Error("création index ratée");
     }
   }
-  private async indexSkus(docsNumber?: number | undefined) {
-    const skusFile = fs.readFileSync("exemple_donnees.json", "utf8");
-    const skusBrut = JSON.parse(skusFile).skus as any[];
-
+  private async indexSkus(jsonInput: any[], docsNumber?: number | undefined) {
     // -- Reduction du nombre de produits --
     if (docsNumber) {
-      skusBrut.splice(docsNumber);
+      jsonInput.splice(docsNumber);
     }
 
     //  -- Uniformisation des documents --
     console.log("...Uniformisation des documents");
-    let skus = skusBrut.map((sku) => ({
-      /**@todo gerer l ingeratin d une autre langue s il n y a pas de francais */
+    const skus = jsonInput.map((sku) => ({
+      /**@todo gerer l ingeration d une autre langue s il n y a pas de francais */
       /**@todo gerer le flatening des autres langues */
       skuGuid: sku.skuGuid,
       skuDescription: {
-        ...sku.skuDescription,
-        fr: cleaner(sku.skuDescription.fr ?? ""),
+        en: sku.skuDescription.en && cleaner(sku.skuDescription.en),
+        fr: sku.skuDescription.fr && cleaner(sku.skuDescription.fr),
+        es: sku.skuDescription.es && cleaner(sku.skuDescription.es),
+        ge: sku.skuDescription.ge && cleaner(sku.skuDescription.ge),
       },
       skuName: {
-        ...sku.skuName,
-        fr: cleaner(sku.skuName.fr ?? ""),
+        en: sku.skuName.en && cleaner(sku.skuName.en),
+        fr: sku.skuName.fr && cleaner(sku.skuName.fr),
+        es: sku.skuName.es && cleaner(sku.skuName.es),
+        ge: sku.skuName.ge && cleaner(sku.skuName.ge),
       },
     }));
 
     // -- Creation des embeddings par bulk --
     console.log("...Generation des embeddings");
+    const nomClient = jsonInput[0]?.skuChannelNameCollection as string;
     const frDescriptionEmbeddings = await bulkEmbeddingApi(
-      skus.map((sku) => sku.skuDescription.fr),
+      skus.map((sku) => sku.skuDescription.fr ?? ""),
       this.EMBED_DIMS,
+      nomClient + " : decriptions",
       this.__DEBUG__
     );
     const frNameEmbeddings = await bulkEmbeddingApi(
-      skus.map((sku) => sku.skuName.fr),
+      skus.map((sku) => sku.skuName.fr ?? ""),
       this.EMBED_DIMS,
+      nomClient + " : titres",
       this.__DEBUG__
     );
 
     // -- Indexation --
-    console.log("...Indexation des documents");
+    console.log("...Tentative de stockage en bdd");
     let operations: any[] = [];
     skus.forEach((sku: T_sku, i) => {
       operations.push({ create: { _index: this.INDEX_NAME } });

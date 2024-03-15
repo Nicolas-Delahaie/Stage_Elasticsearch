@@ -39,7 +39,6 @@
     "useTabs": false,
     "embeddedLanguageFormatting": "auto",
     "vueIndentScriptAndStyle": false,
-    "filepath": "e:\\STAGE_Nicolas_delahaie\\ElasticSearchNicolas\\scripts\\embeddings.ts",
-    "parser": "typescript"
+    "filepath": "e:\\STAGE_Nicolas_delahaie\\ElasticSearchNicolas\\scripts\\embeddings.ts"
   }
 }
