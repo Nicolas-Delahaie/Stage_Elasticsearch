@@ -24,11 +24,21 @@ type resApi =
   | { error: apiError };
 type apiError = { message: string; type: string; param: any; code: any };
 export async function requestEmbeddingApi(texts: string[], dimensions: number): Promise<resFunction> {
+  let config;
+  try {
+    config = JSON.parse(fs.readFileSync("config.json", "utf-8"));
+  } catch (e) {
+    throw Error("Impossible de lire le fichier de configuration (config.json)");
+  }
+
+  const openAIKey = config.openai_key;
+  if (!openAIKey) throw Error("Impossible de trouver la clé d'API d'OpenAI");
+
   let res: Response;
   try {
     res = await fetch("https://api.openai.com/v1/embeddings", {
       headers: {
-        Authorization: "Bearer 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",
+        Authorization: `Bearer ${openAIKey}`,
         "Content-Type": "application/json",
       },
       method: "POST",
