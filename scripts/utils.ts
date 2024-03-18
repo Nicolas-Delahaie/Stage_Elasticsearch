@@ -1,6 +1,6 @@
 import fs from "fs";
-import asciiTranslations from "format_files/asciiTranslations.json";
-import frStopwords from "format_files/stopwords-fr.json";
+import asciiTranslations from "./format_files/asciiTranslations.json";
+import frStopwords from "./format_files/stopwords-fr.json";
 
 const MODEL_NAME = "text-embedding-3-small";
 

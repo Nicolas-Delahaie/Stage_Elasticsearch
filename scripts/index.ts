@@ -1,6 +1,6 @@
 import fs from "fs";
-import { Client } from "@elastic/elasticsearch";
-import { cleaner, requestEmbeddingApi, storeTokenCount } from "utils";
+import { Client, errors } from "@elastic/elasticsearch";
+import { cleaner, requestEmbeddingApi, storeTokenCount } from "./utils";
 
 type Langues = "fr" | "es" | "en" | "ge";
 export type T_sku = {
@@ -14,7 +14,7 @@ export type T_sku = {
 export class Initializer extends Client {
   public readonly INDEX_NAME: string = "skus";
   public readonly EMBED_DIMS = 256;
-  public readonly SKUS_BULK_LIMIT = 10000; // ce nombre est arbitraire et depend de la taille des donnes (nom, description et surtout dimension embedding)
+  public readonly SKUS_BULK_LIMIT = 10000; // ce nombre est arbitraire et depend de la taille des donnes (nom, description et surtout dimension embedding) : fonctionne aussi a 15000
   public readonly __DEBUG__ = true;
 
   constructor() {
@@ -36,7 +36,7 @@ export class Initializer extends Client {
   }
 
   public async Initialisation() {
-    const skusFile = fs.readFileSync("exemple_donnees.json", "utf8");
+    const skusFile = fs.readFileSync("skus/exemple_donnees.json", "utf8");
     const skusBrut = JSON.parse(skusFile).skus as any[];
 
     try {
@@ -182,10 +182,21 @@ export class Initializer extends Client {
         operations.push(sku);
       }
 
-      const res = await this.bulk({
-        refresh: true,
-        operations: operations,
-      });
+      let res;
+      try {
+        res = await this.bulk({
+          refresh: true,
+          operations: operations,
+        });
+      } catch (e) {
+        if (e instanceof errors.ResponseError) {
+          if (e.statusCode === 413) {
+            throw new Error("Trop grosse quantité de données, réduire SKUS_BULK_LIMIT ou augmenter http.max_content_length");
+          }
+        }
+        console.error(e);
+        throw new Error("indexation ratée");
+      }
 
       // -- Analyse du resultat --
       if (res.errors) {
