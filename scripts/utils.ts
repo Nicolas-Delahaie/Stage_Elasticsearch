@@ -1,86 +1,8 @@
 import fs from "fs";
+import asciiTranslations from "format_files/asciiTranslations.json";
+import frStopwords from "format_files/stopwords-fr.json";
+
 const MODEL_NAME = "text-embedding-3-small";
-
-export async function bulkEmbeddingApi(texts: string[], dimensions: number, type: string, debug = false) {
-  /**@todo valeurs a definir */
-  const CHARS_IN_A_TOKEN = 60; // Moyenne de nombre de caracteres par token
-  const MAX_TOKENS_PER_SECTION = 8000; // Arrondi de 8191
-  const MAX_CHARS_PER_SECTION = MAX_TOKENS_PER_SECTION * CHARS_IN_A_TOKEN;
-  const SECTION_RATIO_REDUCTION = 6;
-
-  // Gestion des texts vides (genere une erreur dans l api)
-  const emptyTextsIndices = texts
-    .map((text, i) => (text === "" ? i : null)) // Remplacement des textes vides par des null
-    .filter((indice) => indice !== null) as number[]; // Suppression des null
-
-  texts = texts.filter((text) => text !== "");
-
-  let charCounter = 0;
-  let iLastSectionText = 0;
-  let lastRequestFailed = false;
-  let reductionIncrement = undefined;
-  let embeddings: (number[] | undefined)[] = [];
-  while (texts.length !== 0) {
-    if (!lastRequestFailed) {
-      const textLength = texts[iLastSectionText].length;
-      charCounter += textLength;
-    }
-    const isLastElement = iLastSectionText == texts.length - 1;
-
-    if (lastRequestFailed || isLastElement || charCounter > MAX_CHARS_PER_SECTION) {
-      // Tentative de generation d embedding
-      const section = texts.slice(0, iLastSectionText + 1);
-      const others = texts.slice(iLastSectionText + 1);
-      const res = await requestEmbeddingApi(section, dimensions);
-      /**@todo Gerer la sauvegarde des donnees au cas ou ca plante */
-      if (res.success) {
-        // Stockages embeddings et tokens utilises
-        const firstCall = embeddings.length === 0;
-        storeTokenCount(res.tokens, firstCall, type);
-        embeddings.push(...res.data);
-
-        // Mise a jour des variables
-        charCounter = 0;
-        iLastSectionText = 0;
-        lastRequestFailed = false;
-        reductionIncrement = undefined;
-        texts = others;
-        debug && console.log("   \u2705", section.length, "embeddings générés !");
-      } else {
-        const typeErreur = res.error.type;
-        if (typeErreur === "invalid_request_error") {
-          // Tant que la section ne peut pas etre envoyee, elle est reduite
-          lastRequestFailed = true;
-          if (reductionIncrement === undefined) {
-            // Premiere erreur
-            reductionIncrement = Math.round(iLastSectionText / SECTION_RATIO_REDUCTION);
-          }
-          iLastSectionText -= reductionIncrement;
-
-          if (iLastSectionText <= 0) {
-            throw Error('Erreur "' + res.error.type + '" :' + res.error.message);
-          }
-          debug && console.log("   <-- Reduction des donnees envoyees a", iLastSectionText, "(trop grand OpenAI sinon)");
-        } else if (typeErreur === "rate_limit_error") {
-          throw Error('Erreur "' + res.error.type + '" :' + "Impossible de continuer, nombre de requetes max autorisées par OpenAI atteint");
-        } else if (typeErreur === "internal_server_error " || typeErreur === "service_unavailable") {
-          throw Error('Erreur "' + res.error.type + '" :' + "Probleme interne d'OpenAI, impossible de générer les embeddings");
-        } else {
-          throw Error('Erreur "' + res.error.type + '" :' + "Impossible de generer les embeddings OpenAI");
-        }
-      }
-    } else {
-      iLastSectionText++;
-    }
-  }
-
-  // Re insertion des textes vides
-  emptyTextsIndices.map((i) => {
-    embeddings.splice(i, 0, undefined);
-  });
-
-  return embeddings;
-}
 
 type resFunction =
   | {
@@ -101,7 +23,7 @@ type resApi =
     }
   | { error: apiError };
 type apiError = { message: string; type: string; param: any; code: any };
-async function requestEmbeddingApi(texts: string[], dimensions: number): Promise<resFunction> {
+export async function requestEmbeddingApi(texts: string[], dimensions: number): Promise<resFunction> {
   let res: Response;
   try {
     res = await fetch("https://api.openai.com/v1/embeddings", {
@@ -134,7 +56,7 @@ async function requestEmbeddingApi(texts: string[], dimensions: number): Promise
       };
 }
 
-function storeTokenCount(tokenCount: number, isNew = false, type?: string) {
+export function storeTokenCount(tokenCount: number, isNew = false, type?: string) {
   type use = {
     date: string;
     counter: number;
@@ -164,6 +86,78 @@ function storeTokenCount(tokenCount: number, isNew = false, type?: string) {
 
   fs.writeFileSync(FILE_NAME, JSON.stringify(uses));
 }
+
+/**
+ * Enleve tous les elements inutiles et uniformise :
+ * - Balises
+ * - Minuscule
+ * - Suppression des apostrophes (elision)
+ * - Transformation de toutes les lettres uniquement en ASCII
+ * - Suppression caracteres speciaux
+ * - Suppression des doublons
+ *
+ * - Suppression des stopwords français
+ * - Dimensions
+ * - Offres
+ */
+export function cleaner(text: string, isFr = false) {
+  const tagRegex = /<[^>]*>/g;
+  const largeSpaceRegex = / {2,}/g; // Pour retirer les espaces generes par la suppression des balises
+  const regexPromos =
+    /(\* Offre de bienvenue 5% de réduction sur votre 1ère commande avec le code: PROMO5)|(- Offre -5%)|(A partir [0-9]+ € D'ACHAT = [0-9]+% DE REMISE-code promo OFFRE[0-9]+)|(Offre de Bienvenue : 5% avec le code promo : PROMO5)|(DERNIÈRE DEMARQUE -10% SUPPLEMENTAIRES.*AVEC LE CODE PROMO : 10)/;
+  const regexDimensions = /[0-9]+ ?x ?[0-9]+( cm)?/;
+  const spaceRegex = /\s+/g;
+  const elisionRegex = /(l|d|m|t|s|j)('|\u2019)/g; // u2019 : ’
+  const specialCharRegex = /\W+/g;
+  const numbersRegex = /[0-9]+/;
+
+  // -- Global --
+  text = text.replace(tagRegex, " "); // Oblige de mettre un espace a la place sinon des mots se colleraient ensemble
+  text = text.replace(largeSpaceRegex, " "); // Certaines balises collees generent plusieurs espaces a la suite
+  if (isFr) {
+    text = text.replace(regexPromos, "");
+    text = text.replace(regexDimensions, "");
+  }
+
+  // -- Pour de chaque token --
+  let tokens = text
+    .split(spaceRegex)
+    .map((token) => {
+      token = token.toLowerCase();
+      if (isFr) {
+        token = token.replace(elisionRegex, "");
+        if (frStopwords.includes(token)) {
+          return null;
+        } // Stop words
+      }
+      token = asciiFolder(token); // Transformation de toutes les lettres en ASCII (plus d accent notament)
+      token = token.replace(specialCharRegex, "");
+      token = token.replace(numbersRegex, "");
+
+      return token;
+    })
+    .filter((token) => !(token === null || token === "")) as string[];
+
+  // Suppression doublons
+  tokens = [...new Set(tokens)];
+
+  return tokens.join(" ");
+}
+
+function asciiFolder(text: string) {
+  type traduction = {
+    base: string;
+    letters: string;
+  };
+  const changes = asciiTranslations as traduction[];
+
+  for (var i = 0; i < changes.length; i++) {
+    text = text.replace(new RegExp(changes[i].letters), changes[i].base);
+  }
+  return text;
+}
+
+// ----------------- TESTS ----------------- //
 function cosineSimilarity(vecA: any, vecB: any) {
   let dotProduct = 0;
   let normA = 0;
@@ -175,8 +169,6 @@ function cosineSimilarity(vecA: any, vecB: any) {
   }
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
-
-// ----------------- TESTS ----------------- //
 async function testSimiliarite() {
   const texts = [
     "David Mathy",
@@ -190,9 +182,3 @@ async function testSimiliarite() {
     // console.log(cosineSimilarity(res.data[0], res.data[1]));
   }
 }
-
-async function test() {
-  let texts = [...Array(180000).fill("Coucou ça va ou quoiiiii ?")];
-  console.log("Resultat : ", (await bulkEmbeddingApi(texts, 3, "Enorme bulk pour test", true)).length, " embeddings");
-}
-// test();

@@ -1,7 +1,6 @@
 import fs from "fs";
 import { Client } from "@elastic/elasticsearch";
-import { bulkEmbeddingApi } from "./bulkEmbeddingApi";
-import { cleaner } from "./cleaner";
+import { cleaner, requestEmbeddingApi, storeTokenCount } from "utils";
 
 type Langues = "fr" | "es" | "en" | "ge";
 export type T_sku = {
@@ -12,9 +11,9 @@ export type T_sku = {
   descriptionEmbedding: number[] | null;
 };
 
-export class Elasticsearch extends Client {
+export class Initializer extends Client {
   public readonly INDEX_NAME: string = "skus";
-  public readonly EMBED_DIMS = 256 * 6;
+  public readonly EMBED_DIMS = 256;
   public readonly SKUS_BULK_LIMIT = 10000; // ce nombre est arbitraire et depend de la taille des donnes (nom, description et surtout dimension embedding)
   public readonly __DEBUG__ = true;
 
@@ -44,7 +43,10 @@ export class Elasticsearch extends Client {
       await this.createIndex();
       console.log("\u2705 Index initialisé");
 
-      await this.indexSkus(skusBrut);
+      const skus = await this.putEmbeddings(skusBrut);
+      console.log("\u2705 Embeddings fabriqués");
+
+      await this.bulkIndexingApi(skus);
       console.log("\u2705 Indexation reussie");
     } catch (error) {
       console.error("\u274C Initialisation ratée :");
@@ -112,7 +114,7 @@ export class Elasticsearch extends Client {
       throw Error("création index ratée");
     }
   }
-  private async indexSkus(jsonInput: any[], docsNumber?: number | undefined) {
+  private async putEmbeddings(jsonInput: any[], docsNumber?: number | undefined) {
     // -- Reduction du nombre de produits --
     if (docsNumber) {
       jsonInput.splice(docsNumber);
@@ -120,7 +122,7 @@ export class Elasticsearch extends Client {
 
     //  -- Uniformisation des documents --
     console.log("...Uniformisation des documents");
-    const cleanSkus = jsonInput.map((sku) => ({
+    const skus = jsonInput.map((sku) => ({
       // Reduction et traitement des attributs
       skuGuid: sku.skuGuid,
       skuDescription: {
@@ -138,39 +140,33 @@ export class Elasticsearch extends Client {
     }));
 
     // -- Creation des embeddings par bulk --
-    console.log("...Generation des embeddings");
+    console.log("...Tentative generation des embeddings");
     const nomClient = jsonInput[0]?.skuChannelNameCollection as string;
-    const frDescriptionEmbeddings = await bulkEmbeddingApi(
-      cleanSkus.map((sku) => sku.skuDescription.fr ?? ""),
-      this.EMBED_DIMS,
-      nomClient + " : decriptions",
-      this.__DEBUG__
+    const frDescriptionEmbeddings = await this.bulkEmbeddingApi(
+      skus.map((sku) => sku.skuDescription.fr ?? ""),
+      nomClient + " : decriptions"
     );
-    const frNameEmbeddings = await bulkEmbeddingApi(
-      cleanSkus.map((sku) => sku.skuName.fr ?? ""),
-      this.EMBED_DIMS,
-      nomClient + " : titres",
-      this.__DEBUG__
+    const frNameEmbeddings = await this.bulkEmbeddingApi(
+      skus.map((sku) => sku.skuName.fr ?? ""),
+      nomClient + " : titres"
     );
 
     // -- Recomposition des produits avec leur embedding
-    const skus: T_sku[] = cleanSkus.map((sku, i) => ({
+    const skusWithEmbeddings: T_sku[] = skus.map((sku, i) => ({
       ...sku,
       nameEmbedding: frNameEmbeddings[i],
       descriptionEmbedding: frDescriptionEmbeddings[i],
     }));
 
-    // -- Indexation --
-    console.log("...Tentative de stockage en bdd");
-    await this.bulkIndexingApi(skus);
+    return skusWithEmbeddings;
   }
 
   /**
    * Envoie les skus en bdd avec le bulkd d Elastic search
    */
   private async bulkIndexingApi(skus: T_sku[]) {
-    /**@todo gerer l ingeratin d une autre langue s il n y a pas de francais */
-    /**@todo gerer le flatening des autres langues */
+    console.log("...Tentative de stockage en bdd");
+
     const nbEnvois = Math.ceil(skus.length / this.SKUS_BULK_LIMIT);
     for (let iEnvoi = 0; iEnvoi < nbEnvois; iEnvoi++) {
       const skuNumber =
@@ -199,11 +195,92 @@ export class Elasticsearch extends Client {
       }
     }
   }
+
+  private async bulkEmbeddingApi(texts: string[], type: string) {
+    /**@todo valeurs a definir */
+    const CHARS_IN_A_TOKEN = 60; // Moyenne de nombre de caracteres par token
+    const MAX_TOKENS_PER_SECTION = 8000; // Arrondi de 8191
+    const MAX_CHARS_PER_SECTION = MAX_TOKENS_PER_SECTION * CHARS_IN_A_TOKEN;
+    const SECTION_RATIO_REDUCTION = 6;
+
+    // Gestion des texts vides (genere une erreur dans l api)
+    const emptyTextsIndices = texts
+      .map((text, i) => (text === "" ? i : null)) // Remplacement des textes vides par des null
+      .filter((indice) => indice !== null) as number[]; // Suppression des null
+
+    texts = texts.filter((text) => text !== "");
+
+    let charCounter = 0;
+    let iLastSectionText = 0;
+    let lastRequestFailed = false;
+    let reductionIncrement = undefined;
+    let embeddings: (number[] | null)[] = [];
+    while (texts.length !== 0) {
+      if (!lastRequestFailed) {
+        const textLength = texts[iLastSectionText].length;
+        charCounter += textLength;
+      }
+      const isLastElement = iLastSectionText == texts.length - 1;
+
+      if (lastRequestFailed || isLastElement || charCounter > MAX_CHARS_PER_SECTION) {
+        // Tentative de generation d embedding
+        const section = texts.slice(0, iLastSectionText + 1);
+        const others = texts.slice(iLastSectionText + 1);
+        const res = await requestEmbeddingApi(section, this.EMBED_DIMS);
+        /**@todo Gerer la sauvegarde des donnees au cas ou ca plante */
+        if (res.success) {
+          // Stockages embeddings et tokens utilises
+          const firstCall = embeddings.length === 0;
+          storeTokenCount(res.tokens, firstCall, type);
+          embeddings.push(...res.data);
+
+          // Mise a jour des variables
+          charCounter = 0;
+          iLastSectionText = 0;
+          lastRequestFailed = false;
+          reductionIncrement = undefined;
+          texts = others;
+          this.__DEBUG__ && console.log("   \u2705", section.length, "embeddings générés !");
+        } else {
+          const typeErreur = res.error.type;
+          if (typeErreur === "invalid_request_error") {
+            // Tant que la section ne peut pas etre envoyee, elle est reduite
+            lastRequestFailed = true;
+            if (reductionIncrement === undefined) {
+              // Premiere erreur
+              reductionIncrement = Math.round(iLastSectionText / SECTION_RATIO_REDUCTION);
+            }
+            iLastSectionText -= reductionIncrement;
+
+            if (iLastSectionText <= 0) {
+              throw Error('Erreur "' + res.error.type + '" :' + res.error.message);
+            }
+            this.__DEBUG__ && console.log("   ...Reduction des donnees envoyees a", iLastSectionText, "(trop grand OpenAI sinon)");
+          } else if (typeErreur === "rate_limit_error") {
+            throw Error('Erreur "' + res.error.type + '" :' + "Impossible de continuer, nombre de requetes max autorisées par OpenAI atteint");
+          } else if (typeErreur === "internal_server_error " || typeErreur === "service_unavailable") {
+            throw Error('Erreur "' + res.error.type + '" :' + "Probleme interne d'OpenAI, impossible de générer les embeddings");
+          } else {
+            throw Error('Erreur "' + res.error.type + '" :' + "Impossible de generer les embeddings OpenAI");
+          }
+        }
+      } else {
+        iLastSectionText++;
+      }
+    }
+
+    // Re insertion des textes vides
+    emptyTextsIndices.map((i) => {
+      embeddings.splice(i, 0, null);
+    });
+
+    return embeddings;
+  }
 }
 
-const els = new Elasticsearch();
+const init = new Initializer();
 (async () => {
-  // await els.Initialisation();
+  await init.Initialisation();
 
   // flattening(
   //   " J'éspère qu'il est fort Le kit de conversion Sparrowlit accompagnera votre enfant du litlit bébé lit au lit junior. Il remplace les lit barreaux sur un lit des côté lit du lit lit. litGrâce lit à lit la lit hauteur du sommier de ,cm, votre enfant pourra monter et descendre de son lit comme un grand. Vous pourrez ainsi le voir évoluer vers l'autonomie sans risque de chute. L’ensemble de la gamme Œuf est réputé pour son esthétisme et son élégance. Elle assure une qualité et une finition irréprochables dans le respect de l'environnement. Cela va du choix de ses matériaux, aux processus de fabrication, mais aussi à la sélection des emballages lit lit lit lit lit lit lit recyclés."
@@ -234,25 +311,14 @@ const els = new Elasticsearch();
 
   // console.log((await client.indices.get({ index: INDEX_NAME }))[INDEX_NAME]);
 
-  // console.log(
-  //   (
-  //     await etk.indices.analyze({
-  //       index: etk.INDEX_NAME,
-  //       body: {
-  //         text: [
-  //           "Joli voile  % coton aufinitions soignées. Il s'adapte à tous les berceaux et lits bébé Troll Nursery.Lavable en machine à °.Se fixe à la flèche de lit présentée dans la même rubrique.",
-  //           "Essentiel pour préserver son matelas, l'alèse spécialement adaptée au matelas berceau TROLL.Coloris écru. % coton waterproof, intérieur  % polyester, bordures avec élastique  Lavable en machine à",
-  //         ],
-  //         analyzer: "embedding_analyzer",
-  //       },
-  //     })
-  //   ).tokens?.map((token) => token.token)
-  // );
-
   const texts = [
     "Essentiel Essentiel Essentiel Essentiel pour préserver son matelas, Essentiel Essentiel Essentiel Essentiel Essentiel l'alèse spécialement adaptée au matelas Essentiel berceau TROLL. Coloris écru.  coton waterproof, intérieur  polyester, bordures avec élastique   Lavable en machine à   ",
     // "Flèche de lit Universelle Troll Nursery. Elle s'adapte à tous les berceaux et lits bébé Troll Nursery (à l'exception des berceaux textile).  Réglable en hauteur. Tube en acier laqué blanc avec pinces crocodile.  A associer au voile universel Troll (même rubrique)",
   ];
-
-  // console.log(await etk.stringAnalyzerForEmbedding(texts));
 })();
+
+// async function test() {
+//   let texts = [...Array(180000).fill("Coucou ça va ou quoiiiii ?")];
+//   console.log("Resultat : ", (await init.bulkEmbeddingApi(texts, 3, "Enorme bulk pour test", true)).length, " embeddings");
+// }
+// test();
