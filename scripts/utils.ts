@@ -77,7 +77,7 @@ export function storeTokenCount(tokenCount: number, isNew = false, type?: string
     throw Error("[storeTokenCount] Erreur : besoins du type ");
   }
 
-  const FILE_NAME = "tokenUse.json";
+  const FILE_NAME = "results/tokenUse.json";
   let uses: use[];
   try {
     uses = JSON.parse(fs.readFileSync(FILE_NAME, "utf8"));

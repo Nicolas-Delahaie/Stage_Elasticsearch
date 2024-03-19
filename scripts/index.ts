@@ -36,17 +36,21 @@ export class Initializer extends Client {
   }
 
   public async Initialisation() {
-    const skusFile = fs.readFileSync("skus/exemple_donnees.json", "utf8");
-    const skusBrut = JSON.parse(skusFile).skus as any[];
+    const skusFile = fs.readFileSync("skus/babyroom.json", "utf8");
+    const brutSkus = JSON.parse(skusFile).skus as any[];
+    const nomClient = brutSkus[0]?.skuChannelNameCollection as string;
 
     try {
       await this.createIndex();
       console.log("\u2705 Index initialisé");
 
-      const skus = await this.putEmbeddings(skusBrut);
+      const cleanedSkus = this.skusCleaning(brutSkus);
+      console.log("\u2705 Nettoyage des attributs effectué");
+
+      const embeddedSkus = await this.putEmbeddings(cleanedSkus, nomClient);
       console.log("\u2705 Embeddings fabriqués");
 
-      await this.bulkIndexingApi(skus);
+      await this.bulkIndexingApi(embeddedSkus);
       console.log("\u2705 Indexation reussie");
     } catch (error) {
       console.error("\u274C Initialisation ratée :");
@@ -114,7 +118,8 @@ export class Initializer extends Client {
       throw Error("création index ratée");
     }
   }
-  private async putEmbeddings(jsonInput: any[], docsNumber?: number | undefined) {
+
+  private skusCleaning(jsonInput: any[], docsNumber?: number) {
     // -- Reduction du nombre de produits --
     if (docsNumber) {
       jsonInput.splice(docsNumber);
@@ -137,18 +142,20 @@ export class Initializer extends Client {
         es: sku.skuName.es && cleaner(sku.skuName.es),
         ge: sku.skuName.ge && cleaner(sku.skuName.ge),
       },
-    }));
+    })) as T_sku[];
+    return skus;
+  }
 
+  private async putEmbeddings(skus: T_sku[], clientName: string) {
     // -- Creation des embeddings par bulk --
     console.log("...Tentative generation des embeddings");
-    const nomClient = jsonInput[0]?.skuChannelNameCollection as string;
     const frDescriptionEmbeddings = await this.bulkEmbeddingApi(
       skus.map((sku) => sku.skuDescription.fr ?? ""),
-      nomClient + " : decriptions"
+      clientName ?? "Client inconnu" + " : decriptions"
     );
     const frNameEmbeddings = await this.bulkEmbeddingApi(
       skus.map((sku) => sku.skuName.fr ?? ""),
-      nomClient + " : titres"
+      clientName ?? "Client inconnu" + " : titres"
     );
 
     // -- Recomposition des produits avec leur embedding
@@ -207,7 +214,7 @@ export class Initializer extends Client {
     }
   }
 
-  private async bulkEmbeddingApi(texts: string[], type: string) {
+  public async bulkEmbeddingApi(texts: string[], type: string) {
     /**@todo valeurs a definir */
     const CHARS_IN_A_TOKEN = 60; // Moyenne de nombre de caracteres par token
     const MAX_TOKENS_PER_SECTION = 8000; // Arrondi de 8191
@@ -291,27 +298,27 @@ export class Initializer extends Client {
 
 const init = new Initializer();
 (async () => {
-  await init.Initialisation();
+  // await init.Initialisation();
 
   // flattening(
   //   " J'éspère qu'il est fort Le kit de conversion Sparrowlit accompagnera votre enfant du litlit bébé lit au lit junior. Il remplace les lit barreaux sur un lit des côté lit du lit lit. litGrâce lit à lit la lit hauteur du sommier de ,cm, votre enfant pourra monter et descendre de son lit comme un grand. Vous pourrez ainsi le voir évoluer vers l'autonomie sans risque de chute. L’ensemble de la gamme Œuf est réputé pour son esthétisme et son élégance. Elle assure une qualité et une finition irréprochables dans le respect de l'environnement. Cela va du choix de ses matériaux, aux processus de fabrication, mais aussi à la sélection des emballages lit lit lit lit lit lit lit recyclés."
   // );
 
-  // const queryEmbedding = (await bulkEmbeddingApi(["matela bebe"], els.EMBED_DIMS))[0];
+  // const queryEmbedding = (await init.bulkEmbeddingApi(["etagère 3030"], "test recherche"))[0];
 
   // if (queryEmbedding) {
   //   console.log(
   //     (
-  //       await els.search({
+  //       await init.search({
   //         knn: {
   //           field: "descriptionEmbedding",
-  //           k: 3,
+  //           k: 10,
   //           num_candidates: 1000,
   //           query_vector: queryEmbedding,
   //           boost: 1,
   //         },
   //       })
-  //     ).hits.hits[0]
+  //     ).hits.hits.map((hit) => hit?._source)
   //   );
   // }
 

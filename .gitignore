@@ -1,15 +1,16 @@
-elasticsearch-*
-node_modules
-tokenUse.json
+# Node.js
+node_modules/
 bin/
 obj/
 
+# Visual Studio Code
 *.user
 *.useroscache
 *.suo
-
 *.userprefs
 *.nupkg
 *.dll
 
+# JSONS
 config.json
+results/
