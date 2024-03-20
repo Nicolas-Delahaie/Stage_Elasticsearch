@@ -59,8 +59,8 @@ export class Initializer extends Client {
       await this.bulkIndexingApi(embeddedSkus);
       console.log("\u2705 Indexation reussie");
     } catch (error) {
-      console.error("\u274C Initialisation ratée. Plus d'informations dans results/logs.json");
-      storeInResultFile(error, "logs.json");
+      console.error("\u274C Initialisation ratée. Plus d'informations dans results/logs.txt");
+      storeInResultFile(error, "logs.txt");
     }
   }
   private async createIndex() {
@@ -329,7 +329,7 @@ export class Initializer extends Client {
 
 const init = new Initializer();
 (async () => {
-  // await init.Initialisation();
+  await init.Initialisation();
 
   // const skus = JSON.parse(readFileSync("remainingSkus.json", "utf8"));
   // console.log(await init.bulkIndexingApi(skus));
@@ -338,7 +338,7 @@ const init = new Initializer();
   //   " J'éspère qu'il est fort Le kit de conversion Sparrowlit accompagnera votre enfant du litlit bébé lit au lit junior. Il remplace les lit barreaux sur un lit des côté lit du lit lit. litGrâce lit à lit la lit hauteur du sommier de ,cm, votre enfant pourra monter et descendre de son lit comme un grand. Vous pourrez ainsi le voir évoluer vers l'autonomie sans risque de chute. L’ensemble de la gamme Œuf est réputé pour son esthétisme et son élégance. Elle assure une qualité et une finition irréprochables dans le respect de l'environnement. Cela va du choix de ses matériaux, aux processus de fabrication, mais aussi à la sélection des emballages lit lit lit lit lit lit lit recyclés."
   // );
 
-  const queryEmbedding = (await init.bulkEmbeddingApi(["chaises"], "test recherche"))[0];
+  const queryEmbedding = (await init.bulkEmbeddingApi(["DIN338-1016"], "test recherche"))[0];
 
   if (queryEmbedding) {
     let res = await init.search({
@@ -363,6 +363,7 @@ const init = new Initializer();
       }
     });
 
+    console.log(res.hits.hits.map((hit) => hit._score));
     console.log(res3);
   }
 

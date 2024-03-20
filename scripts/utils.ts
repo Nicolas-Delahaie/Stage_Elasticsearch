@@ -48,7 +48,7 @@ export async function requestEmbeddingApi(texts: string[], dimensions: number): 
         dimensions,
       }),
     });
-  } catch (error) {
+  } catch (_) {
     throw Error("impossible d'accéder à l'API d'OpenAI");
   }
 
@@ -168,25 +168,21 @@ function asciiFolder(text: string) {
 }
 
 export function storeInResultFile(object: unknown, fileName: string) {
-  let newContent;
+  let newContent: string;
 
   if (object === null) {
-    newContent = { message: "null object unstorable" };
+    newContent = "null object unstorable";
   } else if (object instanceof Error) {
-    newContent = {
-      message: object.message,
-      name: object.name,
-      stack: object.stack,
-    };
+    newContent = object.stack ?? object.message;
   } else if (typeof object === "string") {
-    newContent = { message: object };
-  } else if (typeof object === "object") {
     newContent = object;
+  } else if (typeof object === "object") {
+    newContent = JSON.stringify(object);
   } else {
-    newContent = { message: "object unstorable" };
+    newContent = "object unstorable";
   }
 
-  fs.writeFileSync("results/" + fileName, JSON.stringify(newContent));
+  fs.writeFileSync("results/" + fileName, newContent);
 }
 
 /**
