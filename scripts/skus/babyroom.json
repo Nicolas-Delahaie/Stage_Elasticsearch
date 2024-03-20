@@ -1,5 +1,4 @@
-{
-  "skus": [
+  [
     {
       "sku": "0-4SPCK02",
       "skuGuid": "333d10bd-a157-4778-8cca-387be6fa6fd5",
@@ -67192,6 +67191,4 @@
       "skuFrameworkAgreements": [],
       "skuIsOnFrameworkAggrement": false
     }
-  ],
-  "total": 909
-}
+  ]
