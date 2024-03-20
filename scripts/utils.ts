@@ -167,6 +167,53 @@ function asciiFolder(text: string) {
   return text;
 }
 
+export function storeInResultFile(object: unknown, fileName: string) {
+  let newContent;
+
+  if (object === null) {
+    newContent = { message: "null object unstorable" };
+  } else if (object instanceof Error) {
+    newContent = {
+      message: object.message,
+      name: object.name,
+      stack: object.stack,
+    };
+  } else if (typeof object === "string") {
+    newContent = { message: object };
+  } else if (typeof object === "object") {
+    newContent = object;
+  } else {
+    newContent = { message: "object unstorable" };
+  }
+
+  fs.writeFileSync("results/" + fileName, JSON.stringify(newContent));
+}
+
+/**
+ * Combine les 2 embeddings.
+ */
+export function combineEmbeddings(emb1: number[], emb2: number[], weightTitle: number, weightDescription: number) {
+  const combinedEmbedding = [];
+  for (let i = 0; i < emb1.length; i++) {
+    combinedEmbedding[i] = (weightTitle * emb1[i] + weightDescription * emb2[i]) / (weightTitle + weightDescription);
+  }
+  return combinedEmbedding;
+}
+
+export function normalizeEmbedding(embedding: number[]) {
+  if (!embedding) throw Error("[normalizeEmbedding] embedding is falsy");
+  const norm = vectorNorm(embedding);
+  return embedding.map((dimension) => dimension / norm);
+}
+
+function vectorNorm(vector: number[]) {
+  let sumOfSquares = 0;
+  for (const dimension of vector) {
+    sumOfSquares += dimension * dimension;
+  }
+  return Math.sqrt(sumOfSquares);
+}
+
 // ----------------- TESTS ----------------- //
 function cosineSimilarity(vecA: any, vecB: any) {
   let dotProduct = 0;

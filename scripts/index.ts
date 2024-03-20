@@ -1,21 +1,24 @@
 import fs from "fs";
 import { Client, errors } from "@elastic/elasticsearch";
-import { cleaner, requestEmbeddingApi, storeTokenCount } from "./utils";
+import { cleaner, combineEmbeddings, normalizeEmbedding, requestEmbeddingApi, storeInResultFile, storeTokenCount } from "./utils";
 
 type Langues = "fr" | "es" | "en" | "ge";
 export type T_sku = {
   skuGuid: string;
   skuName: Partial<Record<Langues, string>>;
   skuDescription: Partial<Record<Langues, string>>;
-  nameEmbedding: number[] | null;
-  descriptionEmbedding: number[] | null;
+  embedding: number[] | null;
 };
 
 export class Initializer extends Client {
+  public readonly __DEBUG__ = true;
+  public readonly EMBEDDINGS_WEIGHTS = {
+    name: 1,
+    description: 3,
+  };
   public readonly INDEX_NAME: string = "skus";
   public readonly EMBED_DIMS = 256;
   public readonly SKUS_BULK_LIMIT = 10000; // ce nombre est arbitraire et depend de la taille des donnes (nom, description et surtout dimension embedding) : fonctionne aussi a 15000
-  public readonly __DEBUG__ = true;
 
   constructor() {
     super({
@@ -36,11 +39,14 @@ export class Initializer extends Client {
   }
 
   public async Initialisation() {
-    const skusFile = fs.readFileSync("skus/babyroom.json", "utf8");
-    const brutSkus = JSON.parse(skusFile).skus as any[];
-    const nomClient = brutSkus[0]?.skuChannelNameCollection as string;
-
     try {
+      const nomClient = "b2bcloudcommerce";
+
+      console.log("...Importation fichier JSON");
+      const skusFile = fs.readFileSync("skus/" + nomClient + ".json", "utf8");
+      const brutSkus = JSON.parse(skusFile) as any[];
+      console.log("\u2705 Fichier JSON importé (" + brutSkus.length + " produits)");
+
       await this.createIndex();
       console.log("\u2705 Index initialisé");
 
@@ -53,8 +59,8 @@ export class Initializer extends Client {
       await this.bulkIndexingApi(embeddedSkus);
       console.log("\u2705 Indexation reussie");
     } catch (error) {
-      console.error("\u274C Initialisation ratée :");
-      throw error;
+      console.error("\u274C Initialisation ratée. Plus d'informations dans results/logs.json");
+      storeInResultFile(error, "logs.json");
     }
   }
   private async createIndex() {
@@ -99,12 +105,7 @@ export class Initializer extends Client {
                 ge: { type: "text", analyzer: "german" },
               },
             },
-            nameEmbedding: {
-              type: "dense_vector",
-              dims: this.EMBED_DIMS,
-              similarity: "cosine", // Le vecteur est normalise donc la similarite cosinus suffit (pas besoins de normaliser la magnitude)
-            },
-            descriptionEmbedding: {
+            embedding: {
               type: "dense_vector",
               dims: this.EMBED_DIMS,
               similarity: "cosine", // Le vecteur est normalise donc la similarite cosinus suffit (pas besoins de normaliser la magnitude)
@@ -120,6 +121,9 @@ export class Initializer extends Client {
   }
 
   private skusCleaning(jsonInput: any[], docsNumber?: number) {
+    if (!jsonInput) {
+      throw Error("jsonInput n'est pas defini");
+    }
     // -- Reduction du nombre de produits --
     if (docsNumber) {
       jsonInput.splice(docsNumber);
@@ -149,41 +153,63 @@ export class Initializer extends Client {
   private async putEmbeddings(skus: T_sku[], clientName: string) {
     // -- Creation des embeddings par bulk --
     console.log("...Tentative generation des embeddings");
+    this.__DEBUG__ && console.log("   ...Génération des embeddings de description non nulles");
     const frDescriptionEmbeddings = await this.bulkEmbeddingApi(
       skus.map((sku) => sku.skuDescription.fr ?? ""),
       clientName ?? "Client inconnu" + " : decriptions"
     );
+    this.__DEBUG__ && console.log("   ...Génération des embeddings de titre non nuls");
     const frNameEmbeddings = await this.bulkEmbeddingApi(
       skus.map((sku) => sku.skuName.fr ?? ""),
       clientName ?? "Client inconnu" + " : titres"
     );
 
-    // -- Recomposition des produits avec leur embedding
-    const skusWithEmbeddings: T_sku[] = skus.map((sku, i) => ({
-      ...sku,
-      nameEmbedding: frNameEmbeddings[i],
-      descriptionEmbedding: frDescriptionEmbeddings[i],
-    }));
+    // -- Traitement des embeddings --
+    this.__DEBUG__ && console.log("   ...Traitement des embeddings");
+    const embeddings: (number[] | null)[] = [];
+    for (let i = 0; i < frDescriptionEmbeddings.length; i++) {
+      const emb1 = frDescriptionEmbeddings[i];
+      const emb2 = frNameEmbeddings[i];
+      let newEmbedding;
+      if (emb1 !== null && emb2 !== null) {
+        const fusion = combineEmbeddings(emb1, emb2, this.EMBEDDINGS_WEIGHTS.description, this.EMBEDDINGS_WEIGHTS.name);
+        const normalizedEmbeddings = normalizeEmbedding(fusion);
+        newEmbedding = normalizedEmbeddings;
+      } else if (emb1 !== null) {
+        newEmbedding = emb1;
+      } else if (emb2 !== null) {
+        newEmbedding = emb2;
+      } else {
+        newEmbedding = null;
+      }
+      embeddings[i] = newEmbedding;
+    }
+    this.__DEBUG__ && console.log("   \u2705 Embeddings pondérés et normalisés avec succès");
 
-    return skusWithEmbeddings;
+    // -- Recomposition des produits avec leur embedding
+    return skus.map((sku, i) => ({
+      ...sku,
+      embedding: embeddings[i],
+    })) as T_sku[];
   }
 
   /**
    * Envoie les skus en bdd avec le bulkd d Elastic search
    */
-  private async bulkIndexingApi(skus: T_sku[]) {
+  public async bulkIndexingApi(skus: T_sku[]) {
     console.log("...Tentative de stockage en bdd");
 
-    const nbEnvois = Math.ceil(skus.length / this.SKUS_BULK_LIMIT);
-    for (let iEnvoi = 0; iEnvoi < nbEnvois; iEnvoi++) {
+    const totalSkus = skus.length;
+    const packageNumber = Math.ceil(totalSkus / this.SKUS_BULK_LIMIT);
+    for (let iPackage = 0; iPackage < packageNumber; iPackage++) {
       const skuNumber =
-        iEnvoi === nbEnvois - 1
-          ? skus.length % this.SKUS_BULK_LIMIT // Dernier element
+        iPackage === packageNumber - 1
+          ? totalSkus % this.SKUS_BULK_LIMIT // Dernier element
           : this.SKUS_BULK_LIMIT;
 
       let operations = [];
       for (let i = 0; i < skuNumber; i++) {
-        const iSku = iEnvoi * this.SKUS_BULK_LIMIT + i;
+        const iSku = iPackage * this.SKUS_BULK_LIMIT + i;
         const sku = skus[iSku];
         operations.push({ create: { _index: this.INDEX_NAME } });
         operations.push(sku);
@@ -196,13 +222,18 @@ export class Initializer extends Client {
           operations: operations,
         });
       } catch (e) {
-        if (e instanceof errors.ResponseError) {
-          if (e.statusCode === 413) {
-            throw new Error("Trop grosse quantité de données, réduire SKUS_BULK_LIMIT ou augmenter http.max_content_length");
-          }
+        // Stockage des skus restants a envoyer
+        const remainingSkus = skus.slice(iPackage * this.SKUS_BULK_LIMIT);
+        storeInResultFile(remainingSkus, "remainingSkus.json");
+
+        let errorMsg: string;
+        if (e instanceof errors.ResponseError && e.statusCode === 413) {
+          errorMsg = "trop grosse quantité de données, réduire SKUS_BULK_LIMIT ou augmenter http.max_content_length. ";
+        } else {
+          errorMsg = "indexation ratée : probleme inconnu. ";
         }
-        console.error(e);
-        throw new Error("indexation ratée");
+        errorMsg += "Skus restants stockés dans results/remainingSkus.json. Re lancez bulkIndexingApi() avec ces données.";
+        throw new Error(errorMsg);
       }
 
       // -- Analyse du resultat --
@@ -216,7 +247,7 @@ export class Initializer extends Client {
 
   public async bulkEmbeddingApi(texts: string[], type: string) {
     /**@todo valeurs a definir */
-    const CHARS_IN_A_TOKEN = 60; // Moyenne de nombre de caracteres par token
+    const CHARS_IN_A_TOKEN = 5; // Moyenne de nombre de caracteres par token
     const MAX_TOKENS_PER_SECTION = 8000; // Arrondi de 8191
     const MAX_CHARS_PER_SECTION = MAX_TOKENS_PER_SECTION * CHARS_IN_A_TOKEN;
     const SECTION_RATIO_REDUCTION = 6;
@@ -258,7 +289,7 @@ export class Initializer extends Client {
           lastRequestFailed = false;
           reductionIncrement = undefined;
           texts = others;
-          this.__DEBUG__ && console.log("   \u2705", section.length, "embeddings générés !");
+          this.__DEBUG__ && console.log("   \u2705", section.length, "embeddings générés");
         } else {
           const typeErreur = res.error.type;
           if (typeErreur === "invalid_request_error") {
@@ -273,7 +304,7 @@ export class Initializer extends Client {
             if (iLastSectionText <= 0) {
               throw Error('Erreur "' + res.error.type + '" :' + res.error.message);
             }
-            this.__DEBUG__ && console.log("   ...Reduction des donnees envoyees a", iLastSectionText, "(trop grand OpenAI sinon)");
+            this.__DEBUG__ && console.log("      ...Reduction des donnees envoyees a", iLastSectionText, "(trop grand OpenAI sinon)");
           } else if (typeErreur === "rate_limit_error") {
             throw Error('Erreur "' + res.error.type + '" :' + "Impossible de continuer, nombre de requetes max autorisées par OpenAI atteint");
           } else if (typeErreur === "internal_server_error " || typeErreur === "service_unavailable") {
@@ -300,26 +331,48 @@ const init = new Initializer();
 (async () => {
   // await init.Initialisation();
 
+  // const skus = JSON.parse(readFileSync("remainingSkus.json", "utf8"));
+  // console.log(await init.bulkIndexingApi(skus));
+
   // flattening(
   //   " J'éspère qu'il est fort Le kit de conversion Sparrowlit accompagnera votre enfant du litlit bébé lit au lit junior. Il remplace les lit barreaux sur un lit des côté lit du lit lit. litGrâce lit à lit la lit hauteur du sommier de ,cm, votre enfant pourra monter et descendre de son lit comme un grand. Vous pourrez ainsi le voir évoluer vers l'autonomie sans risque de chute. L’ensemble de la gamme Œuf est réputé pour son esthétisme et son élégance. Elle assure une qualité et une finition irréprochables dans le respect de l'environnement. Cela va du choix de ses matériaux, aux processus de fabrication, mais aussi à la sélection des emballages lit lit lit lit lit lit lit recyclés."
   // );
 
-  // const queryEmbedding = (await init.bulkEmbeddingApi(["etagère 3030"], "test recherche"))[0];
+  const queryEmbedding = (await init.bulkEmbeddingApi(["chaises"], "test recherche"))[0];
 
-  // if (queryEmbedding) {
-  //   console.log(
-  //     (
-  //       await init.search({
-  //         knn: {
-  //           field: "descriptionEmbedding",
-  //           k: 10,
-  //           num_candidates: 1000,
-  //           query_vector: queryEmbedding,
-  //           boost: 1,
-  //         },
-  //       })
-  //     ).hits.hits.map((hit) => hit?._source)
-  //   );
+  if (queryEmbedding) {
+    let res = await init.search({
+      knn: {
+        field: "embedding",
+        k: 10,
+        num_candidates: 1000,
+        query_vector: queryEmbedding,
+        boost: 1,
+      },
+    });
+
+    const res2 = res.hits.hits.map((hit) => hit?._source);
+
+    const res3 = res2.map((sku) => {
+      if (sku !== null && typeof sku === "object" && "skuGuid" in sku && "skuDescription" in sku && "skuName" in sku) {
+        return {
+          guid: sku.skuGuid,
+          skuDescription: sku.skuDescription,
+          skuName: sku.skuName,
+        };
+      }
+    });
+
+    console.log(res3);
+  }
+
+  // // Tests ponderation et normalisation
+  // const queryEmbeddings = await init.bulkEmbeddingApi(["etagère", "avion de chasse"], "test fusion");
+  // const fusion = combineEmbeddings(queryEmbeddings[0], queryEmbeddings[0], 1, 1);
+  // if (queryEmbeddings[0] && queryEmbeddings[1] && fusion) {
+  //   console.log("Normes des 2 embeddings :", vectorNorm(queryEmbeddings[0]), vectorNorm(queryEmbeddings[1]));
+  //   const normalizedFusion = normalizeEmbedding(fusion);
+  //   console.log("Fusion avant normalisation :", vectorNorm(fusion), "Apres normalisation :", vectorNorm(normalizedFusion));
   // }
 
   // console.log(
