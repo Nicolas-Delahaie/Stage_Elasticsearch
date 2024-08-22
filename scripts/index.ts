@@ -18,10 +18,20 @@ export class Initializer extends Client {
     description: 3,
   };
   public readonly INDEX_NAME: string = "skus";
-  public readonly EMBED_DIMS = 1536 ;
+  public readonly EMBED_DIMS = 1536;
   public readonly SKUS_BULK_LIMIT = 10000; // ce nombre est arbitraire et depend de la taille des donnes (nom, description et surtout dimension embedding) : fonctionne aussi a 15000
 
   constructor() {
+    let config;
+    try {
+      config = JSON.parse(fs.readFileSync("config.json", "utf-8"));
+    } catch (e) {
+      throw Error("Impossible de lire le fichier de configuration (config.json)");
+    }
+
+    if (!config.elsusername) throw Error("Impossible de trouver le username elastic");
+    if (!config.elspassword) throw Error("Impossible de trouver le mot de passe elastic");
+
     super({
       node: "https://localhost:9200", // Elasticsearch endpoint
       auth: {
@@ -30,8 +40,8 @@ export class Initializer extends Client {
         //   id: "script_javascript",
         //   api_key: "TTIyckRvNEI2bWtNNnItdmhuOFg6M01CSnVwSl9SbUdIXy1rSXhDalhFQQ==",
         // },
-        username: "elastic",
-        password: "tact060103",
+        username: config.elsusername,
+        password: config.elspassword,
       },
       tls: {
         // ca: fs.readFileSync("http_ca.crt"), // Recuperable par "cp es01:/usr/share/elasticsearch/config/certs/http_ca.crt ."
@@ -347,7 +357,6 @@ const init = new Initializer();
   // Sauvegarde de l'embedding dans un fichier temporaire
   fs.writeFileSync("embeddings.json", JSON.stringify(queryEmbedding[0]));
 
-
   // const res = await init.search({
   //   knn: {
   //     field: "embedding",
@@ -365,7 +374,7 @@ const init = new Initializer();
   //       should: [
   //         {
   //           match: {
-              
+
   //             "skuName.fr": {
   //               query: input,
   //               boost: 3, // Poids plus élevé pour le titre
