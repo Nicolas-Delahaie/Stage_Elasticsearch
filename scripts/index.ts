@@ -1,6 +1,7 @@
 import fs from "fs";
 import { Client, errors } from "@elastic/elasticsearch";
 import { cleaner, combineEmbeddings, normalizeEmbedding, requestEmbeddingApi, storeInResultFile, storeTokenCount } from "./utils";
+import { fileSystem } from "@tensorflow/tfjs-node/dist/io";
 
 type Langues = "fr" | "es" | "en" | "ge";
 export type T_sku = {
@@ -17,7 +18,7 @@ export class Initializer extends Client {
     description: 3,
   };
   public readonly INDEX_NAME: string = "skus";
-  public readonly EMBED_DIMS = 256;
+  public readonly EMBED_DIMS = 1536 ;
   public readonly SKUS_BULK_LIMIT = 10000; // ce nombre est arbitraire et depend de la taille des donnes (nom, description et surtout dimension embedding) : fonctionne aussi a 15000
 
   constructor() {
@@ -30,17 +31,21 @@ export class Initializer extends Client {
         //   api_key: "TTIyckRvNEI2bWtNNnItdmhuOFg6M01CSnVwSl9SbUdIXy1rSXhDalhFQQ==",
         // },
         username: "elastic",
-        password: "elastic",
+        password: "tact060103",
       },
       tls: {
-        ca: fs.readFileSync("http_ca.crt"), // Recuperable par "cp es01:/usr/share/elasticsearch/config/certs/http_ca.crt ."
+        // ca: fs.readFileSync("http_ca.crt"), // Recuperable par "cp es01:/usr/share/elasticsearch/config/certs/http_ca.crt ."
+        rejectUnauthorized: false,
       },
     });
   }
 
-  public async Initialisation() {
+  public async Initialization() {
     try {
-      const nomClient = "b2bcloudcommerce";
+      const nomClient = "babyroom";
+
+      // await this.createIndex();
+      // console.log("\u2705 Index initialisé");
 
       console.log("...Importation fichier JSON");
       const skusFile = fs.readFileSync("skus/" + nomClient + ".json", "utf8");
@@ -247,7 +252,7 @@ export class Initializer extends Client {
 
   public async bulkEmbeddingApi(texts: string[], type: string) {
     /**@todo valeurs a definir */
-    const CHARS_IN_A_TOKEN = 5; // Moyenne de nombre de caracteres par token
+    const CHARS_IN_A_TOKEN = 60; // Moyenne de nombre de caracteres par token
     const MAX_TOKENS_PER_SECTION = 8000; // Arrondi de 8191
     const MAX_CHARS_PER_SECTION = MAX_TOKENS_PER_SECTION * CHARS_IN_A_TOKEN;
     const SECTION_RATIO_REDUCTION = 6;
@@ -276,7 +281,6 @@ export class Initializer extends Client {
         const section = texts.slice(0, iLastSectionText + 1);
         const others = texts.slice(iLastSectionText + 1);
         const res = await requestEmbeddingApi(section, this.EMBED_DIMS);
-        /**@todo Gerer la sauvegarde des donnees au cas ou ca plante */
         if (res.success) {
           // Stockages embeddings et tokens utilises
           const firstCall = embeddings.length === 0;
@@ -338,59 +342,86 @@ const init = new Initializer();
   //   " J'éspère qu'il est fort Le kit de conversion Sparrowlit accompagnera votre enfant du litlit bébé lit au lit junior. Il remplace les lit barreaux sur un lit des côté lit du lit lit. litGrâce lit à lit la lit hauteur du sommier de ,cm, votre enfant pourra monter et descendre de son lit comme un grand. Vous pourrez ainsi le voir évoluer vers l'autonomie sans risque de chute. L’ensemble de la gamme Œuf est réputé pour son esthétisme et son élégance. Elle assure une qualité et une finition irréprochables dans le respect de l'environnement. Cela va du choix de ses matériaux, aux processus de fabrication, mais aussi à la sélection des emballages lit lit lit lit lit lit lit recyclés."
   // );
 
-  const queryEmbedding = (await init.bulkEmbeddingApi(["DIN338-1016"], "test recherche"))[0];
+  const categorie = null;
+  const queryEmbedding = (await init.bulkEmbeddingApi(["50cm de diametre"], "test recherche"))!;
+  // Sauvegarde de l'embedding dans un fichier temporaire
+  fs.writeFileSync("embeddings.json", JSON.stringify(queryEmbedding[0]));
 
-  if (queryEmbedding) {
-    let res = await init.search({
-      knn: {
-        field: "embedding",
-        k: 10,
-        num_candidates: 1000,
-        query_vector: queryEmbedding,
-        boost: 1,
-      },
-    });
 
-    const res2 = res.hits.hits.map((hit) => hit?._source);
+  // const res = await init.search({
+  //   knn: {
+  //     field: "embedding",
+  //     k: 5,
+  //     num_candidates: 2000,
+  //     query_vector: queryEmbedding[0]!,
+  //     boost: 1,
+  //   },
+  // });
 
-    const res3 = res2.map((sku) => {
-      if (sku !== null && typeof sku === "object" && "skuGuid" in sku && "skuDescription" in sku && "skuName" in sku) {
-        return {
-          guid: sku.skuGuid,
-          skuDescription: sku.skuDescription,
-          skuName: sku.skuName,
-        };
-      }
-    });
+  // const res = await init.search({
+  //   query: {
+  //     bool: {
+  //       // must: categorie ? [{ match: { categorie } }] : undefined,
+  //       should: [
+  //         {
+  //           match: {
+              
+  //             "skuName.fr": {
+  //               query: input,
+  //               boost: 3, // Poids plus élevé pour le titre
+  //             },
+  //           },
+  //         },
+  //         {
+  //           match: {
+  //             "skuDescription.fr": {
+  //               query: input,
+  //               boost: 1, // Poids standard pour la description
+  //             },
+  //           },
+  //         },
+  //       ],
+  //       minimum_should_match: 1,
+  //     },
+  //   },
+  //   knn: {
+  //     field: "embedding",
+  //     k: 10,
+  //     query_vector: queryEmbedding,
+  //     num_candidates: 500,
+  //   },
+  //   rank: {
+  //     rrf: {
+  //       window_size: 50,
+  //       rank_constant: 20,
+  //     },
+  //   },
+  // });
+  // const res2 = res.hits.hits.map((hit) => hit._source);
+  // const scores = res.hits.hits.map((hit) => hit._score);
 
-    console.log(res.hits.hits.map((hit) => hit._score));
-    console.log(res3);
-  }
-
-  // // Tests ponderation et normalisation
-  // const queryEmbeddings = await init.bulkEmbeddingApi(["etagère", "avion de chasse"], "test fusion");
-  // const fusion = combineEmbeddings(queryEmbeddings[0], queryEmbeddings[0], 1, 1);
-  // if (queryEmbeddings[0] && queryEmbeddings[1] && fusion) {
-  //   console.log("Normes des 2 embeddings :", vectorNorm(queryEmbeddings[0]), vectorNorm(queryEmbeddings[1]));
-  //   const normalizedFusion = normalizeEmbedding(fusion);
-  //   console.log("Fusion avant normalisation :", vectorNorm(fusion), "Apres normalisation :", vectorNorm(normalizedFusion));
-  // }
-
-  // console.log(
-  //   (await etk.indices.getSettings({ index: "_all" }))?.skus.settings?.index
-  //     ?.analysis?.analyzer
-  // );
-
-  // console.log((await client.indices.get({ index: INDEX_NAME }))[INDEX_NAME]);
-
-  const texts = [
-    "Essentiel Essentiel Essentiel Essentiel pour préserver son matelas, Essentiel Essentiel Essentiel Essentiel Essentiel l'alèse spécialement adaptée au matelas Essentiel berceau TROLL. Coloris écru.  coton waterproof, intérieur  polyester, bordures avec élastique   Lavable en machine à   ",
-    // "Flèche de lit Universelle Troll Nursery. Elle s'adapte à tous les berceaux et lits bébé Troll Nursery (à l'exception des berceaux textile).  Réglable en hauteur. Tube en acier laqué blanc avec pinces crocodile.  A associer au voile universel Troll (même rubrique)",
-  ];
+  // const res3 = res2.map((sku) => {
+  //   if (
+  //     sku !== null &&
+  //     typeof sku === "object" &&
+  //     "skuGuid" in sku &&
+  //     "skuDescription" in sku &&
+  //     sku.skuDescription !== null &&
+  //     typeof sku.skuDescription === "object" &&
+  //     "fr" in sku.skuDescription &&
+  //     "skuName" in sku &&
+  //     sku.skuName !== null &&
+  //     typeof sku.skuName === "object" &&
+  //     "fr" in sku.skuName
+  //   ) {
+  //     return {
+  //       guid: sku.skuGuid,
+  //       skuDescription: sku.skuDescription.fr,
+  //       skuName: sku.skuName.fr,
+  //     };
+  //   }
+  // });
+  // console.log(res);
+  // console.log(scores);
+  // console.log(res3);
 })();
-
-// async function test() {
-//   let texts = [...Array(180000).fill("Coucou ça va ou quoiiiii ?")];
-//   console.log("Resultat : ", (await init.bulkEmbeddingApi(texts, 3, "Enorme bulk pour test", true)).length, " embeddings");
-// }
-// test();
